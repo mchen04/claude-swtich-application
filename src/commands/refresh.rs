@@ -1,0 +1,115 @@
+use std::process::Command;
+use std::time::Duration;
+
+use crate::cli::{GlobalOpts, OptionalNameArg};
+use crate::error::{Error, Result};
+use crate::keychain::{self, Keychain};
+use crate::lock::CsLock;
+use crate::paths::Paths;
+use crate::profile::OauthCreds;
+use crate::state::State;
+
+/// Strategy: Anthropic doesn't expose a public OAuth refresh endpoint for first-party
+/// Claude Code creds, so we delegate refresh to the `claude` CLI itself. We write the
+/// stale profile blob into the canonical Keychain entry, run a no-op `claude` invocation
+/// (which triggers Claude Code's own refresh), then copy the freshly-refreshed canonical
+/// blob back into the profile entry.
+pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &OptionalNameArg) -> Result<()> {
+    let state = State::load(&paths.state_file()).unwrap_or_default();
+    let name = args
+        .name
+        .clone()
+        .or_else(|| state.active.clone())
+        .ok_or(Error::NoActiveProfile)?;
+    let target = keychain::profile_account(&name);
+
+    let stale = kc
+        .read(&target)
+        .map_err(|_| Error::ProfileNotFound(name.clone()))?;
+    let creds = OauthCreds::parse(&stale)?;
+    if !creds.is_expired(Duration::from_secs(60)) && args.name.is_some() {
+        eprintln!(
+            "profile `{}` token still valid for {}s — refreshing anyway",
+            name,
+            creds.expires_in().map(|d| d.as_secs() as i64).unwrap_or(0)
+        );
+    }
+
+    if global.dry_run {
+        eprintln!("would delegate refresh of `{}` via `claude /status`", name);
+        return Ok(());
+    }
+
+    let _lock = CsLock::acquire(paths)?;
+
+    let canonical = keychain::canonical_account();
+    let prev_canonical = kc.read(&canonical).ok();
+
+    // Stage stale creds in canonical so Claude Code refreshes them.
+    kc.write(&canonical, &stale)?;
+
+    if which("claude").is_none() {
+        if let Some(prev) = prev_canonical {
+            let _ = kc.write(&canonical, &prev);
+        }
+        return Err(Error::Other(
+            "`claude` CLI not on PATH; run `claude /login` for this profile manually".into(),
+        ));
+    }
+
+    let out = Command::new("claude").args(["/status"]).output();
+    match out {
+        Ok(o) if o.status.success() => {}
+        Ok(o) => {
+            if let Some(prev) = prev_canonical {
+                let _ = kc.write(&canonical, &prev);
+            }
+            return Err(Error::Subprocess {
+                cmd: "claude /status".into(),
+                message: format!(
+                    "exit {}: {}",
+                    o.status.code().unwrap_or(-1),
+                    String::from_utf8_lossy(&o.stderr)
+                ),
+            });
+        }
+        Err(e) => {
+            if let Some(prev) = prev_canonical {
+                let _ = kc.write(&canonical, &prev);
+            }
+            return Err(Error::Subprocess {
+                cmd: "claude /status".into(),
+                message: e.to_string(),
+            });
+        }
+    }
+
+    let refreshed = kc.read(&canonical)?;
+    if refreshed == stale {
+        if let Some(prev) = prev_canonical {
+            let _ = kc.write(&canonical, &prev);
+        }
+        return Err(Error::Other(
+            "Claude Code did not refresh the credential; run `claude /login` for this profile manually"
+                .into(),
+        ));
+    }
+    kc.write(&target, &refreshed)?;
+    if let Some(prev) = prev_canonical {
+        let _ = kc.write(&canonical, &prev);
+    }
+
+    eprintln!("refreshed `{}`", name);
+    Ok(())
+}
+
+fn which(cmd: &str) -> Option<std::path::PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    for p in std::env::split_paths(&path) {
+        let candidate = p.join(cmd);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}

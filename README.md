@@ -1,0 +1,182 @@
+# cs — claude-switch
+
+Sub-second switching between Claude Code accounts, with master-profile sharing of
+skills/commands/agents/CLAUDE.md and a live usage dashboard.
+
+> Status: v0.1 — phases A–E (CLI surface) complete. Ratatui TUI and cwd
+> auto-switch deferred to follow-up phases.
+
+## Why
+
+You have a personal Max plan and a work Pro plan. Today, switching means
+`claude /logout`, `/login`, and waiting. `cs` swaps the macOS Keychain entry
+in-place, updates per-profile `~/.claude/settings.json`, and exits in under a
+second — without losing token state or per-account config.
+
+## Install
+
+```bash
+git clone https://github.com/mchen04/claude-swtich-application
+cd claude-swtich-application
+cargo build --release
+cp target/release/cs ~/.local/bin/   # or wherever your PATH points
+```
+
+Then run once:
+
+```bash
+cs doctor          # read-only environment audit
+cs setup           # installs the shell wrapper into ~/.zshrc
+```
+
+## Quick start
+
+```bash
+# 1. log into your first account inside Claude Code
+claude /login              # follow the OAuth flow
+
+# 2. snapshot it as a named profile
+cs save personal
+
+# 3. log into a second account, save it
+claude /login
+cs save work
+
+# 4. switch between them
+cs personal                # sub-second swap
+cs work
+cs -                       # toggle to the previous profile
+
+# 5. inspect state
+cs list                    # all saved profiles, marked with active/default
+cs status --json | jq      # active profile + token expiry
+cs                         # live dashboard: 5h block, today's spend, by-profile
+```
+
+## Master profile (shared config)
+
+Anything in `~/.claude/{skills,commands,agents,CLAUDE.md}` is duplicated across
+accounts by default. `cs master init` moves those into `~/.claude-cs/master/`
+once and replaces the originals with symlinks — every profile sees the same
+content.
+
+```bash
+cs master init             # one-time migration, with rollback manifest
+cs master status           # which paths are symlinked vs. local
+cs override work skills/private-thing
+                           # work profile gets its own copy; personal still uses master
+cs share-skill foo         # promote a profile-local skill back into master
+cs uninstall               # rolls back to plain ~/.claude — byte-identical
+```
+
+`uninstall` is byte-clean by design — verified by an integration test that
+diffs the directory snapshot before/after.
+
+## Commands
+
+```
+cs                         live dashboard (default when run with no args)
+cs <profile>               switch to <profile>
+cs <profile> -- claude …   switch then exec claude with passthrough args
+cs -                       switch to previous profile
+
+cs list                    list saved profiles
+cs status [<profile>]      active profile details (token expiry, plan)
+cs save <name>             save canonical Claude Code creds as a profile
+cs rm <name>               remove a saved profile
+cs rename <from> <to>      rename a saved profile
+cs default <name>          set the default profile
+cs default-go              switch to the default profile
+cs refresh [<profile>]     refresh OAuth via `claude /status` delegation
+
+cs usage                   one-shot usage (current 5h block by default)
+cs usage --watch           live updates every 1s
+cs usage --daily           daily totals
+cs usage --monthly         monthly totals
+cs dashboard               full snapshot (active + block + today)
+
+cs master init|status      manage shared master profile
+cs override <profile> <p>  per-profile override of a master path
+cs unoverride <profile> <p>
+cs share-skill <name>      promote profile-local skill into master
+
+cs link [<profile>]        bind cwd → profile (auto-switch in v0.2)
+cs links                   list all cwd bindings
+
+cs setup [--shell zsh|bash]   install/repair the shell wrapper
+cs alias <name>               add `alias <name>='cs <name>'`
+cs migrate [--from <path>]    inspect a legacy claude-switch config
+
+cs doctor                  read-only health check
+cs uninstall [--keep-master]  remove cs (symlinks, wrapper)
+cs tui                     [stub] Ratatui TUI lands in Phase F
+
+Global flags: --json --no-color --dry-run --profile <name> -v / -vv
+```
+
+## Layout
+
+```
+~/.claude/                          # canonical Claude Code home
+├── settings.json                   # rewritten on switch from per-profile copy
+├── .active-profile                 # tracking marker for compat
+├── skills/  → ~/.claude-cs/master/skills/   (after `cs master init`)
+├── commands/ → ~/.claude-cs/master/commands/
+├── agents/   → ~/.claude-cs/master/agents/
+└── CLAUDE.md → ~/.claude-cs/master/CLAUDE.md
+
+~/.claude-cs/                       # cs's home
+├── master/                         # shared content (skills/, commands/, …)
+├── profiles/<name>/
+│   ├── settings.json               # per-profile (replaces canonical on switch)
+│   ├── env                         # KEY=VAL pairs sourced post-switch
+│   └── overrides/                  # paths that shadow master for this profile
+├── state.json                      # {active, previous, default, switched_at}
+├── links.json                      # cwd → profile bindings
+├── session-tags.jsonl              # session_id → profile attribution log
+└── .backups/<ts>/manifest.json     # every destructive op is reversible
+```
+
+Keychain entries:
+
+- `Claude Code-credentials` / `acct=$USER` — Claude Code's canonical entry (read/written by `cs` on switch)
+- `Claude Code-credentials` / `acct=Claude Code-credentials-<name>` — saved profile
+
+## Safety
+
+- Every destructive operation acquires `~/.claude-cs/.lock` (advisory `flock`)
+  to prevent two `cs` invocations from clobbering each other.
+- Every Keychain write is verified byte-equal and rolled back on mismatch.
+- Every destructive op writes `~/.claude-cs/.backups/<ts>/manifest.json`
+  recording the before/after blobs (base64) so a future `cs revert <ts>` can
+  replay in reverse.
+- `--dry-run` is supported on every mutation and prints the planned actions.
+
+## Dev
+
+```bash
+cargo test                            # 21 integration + 13 unit tests
+cargo clippy --all-targets -- -D warnings
+cargo build --release
+```
+
+Test seam: every filesystem and Keychain access is routed through `Paths` and
+the `Keychain` trait so tests can inject a tmpdir + a JSON-backed mock Keychain
+via `CS_TEST_KEYCHAIN=1` and `CS_TEST_KEYCHAIN_FIXTURE=/path/to/fixture.json`.
+
+## Status / roadmap
+
+- [x] Phase A — skeleton, `cs doctor`, env probes
+- [x] Phase B — `cs list`, `cs status` (text + JSON)
+- [x] Phase C — save/rm/rename/default/switch/`-`/refresh/setup/alias/migrate
+- [x] Phase D — master init/uninstall/override/share-skill (byte-clean roundtrip)
+- [x] Phase E — ccusage data layer, dashboard, `cs link`/`cs links`
+- [ ] Phase F — Ratatui TUI on top of the Phase E data structs
+- [ ] Phase G — cwd auto-switch precmd hook, expiry/quota notifications, `cs audit`, `cs revert`
+- [ ] Phase H — `cs export`/`cs import` with `age`, Linux secret-service backend, brew tap
+
+## Acknowledgements
+
+Successor to [Mamdouh66/claude-switch](https://github.com/Mamdouh66/claude-switch);
+ccusage data layer is the [ryoppippi/ccusage](https://github.com/ryoppippi/ccusage)
+CLI invoked via `bunx` / `npx`.
