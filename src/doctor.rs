@@ -7,13 +7,16 @@ use serde::Serialize;
 
 use crate::error::Result;
 use crate::keychain::{self, Keychain};
+use crate::master::{self, ItemState, MasterStatus};
 use crate::paths::Paths;
+use crate::state::State;
 
 #[derive(Debug, Serialize)]
 pub struct DoctorReport {
     pub paths: PathReport,
     pub tooling: Vec<ToolCheck>,
     pub keychain: KeychainReport,
+    pub master: MasterStatus,
     pub clock_skew_secs: i64,
     pub generated_at: String,
 }
@@ -87,6 +90,9 @@ pub fn run(paths: &Paths, kc: &dyn Keychain) -> Result<DoctorReport> {
 
     let keychain = check_keychain(kc);
 
+    let state = State::load(&paths.state_file()).unwrap_or_default();
+    let master = master::status(paths, &state)?;
+
     let clock_skew_secs = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -99,6 +105,7 @@ pub fn run(paths: &Paths, kc: &dyn Keychain) -> Result<DoctorReport> {
         paths: path_report,
         tooling,
         keychain,
+        master,
         clock_skew_secs,
         generated_at,
     })
@@ -249,6 +256,25 @@ impl fmt::Display for DoctorReport {
         }
         if let Some(err) = &self.keychain.error {
             writeln!(f, "  error           : {err}")?;
+        }
+        writeln!(f)?;
+        writeln!(f, "Master profile")?;
+        match &self.master.master {
+            Some(name) => writeln!(f, "  designated      : {name}")?,
+            None => writeln!(f, "  designated      : (none)")?,
+        }
+        if let Some(dir) = &self.master.master_dir {
+            writeln!(f, "  dir             : {}", dir.display())?;
+        }
+        for item in &self.master.items {
+            let mark = match item.state {
+                ItemState::Symlinked => "ok ",
+                ItemState::Missing => "—  ",
+                ItemState::Local => "loc",
+                ItemState::SymlinkBroken => "BAD",
+                ItemState::SymlinkForeign => "FRN",
+            };
+            writeln!(f, "  [{mark}] {:<12} {}", item.name, item.claude_path.display())?;
         }
         Ok(())
     }

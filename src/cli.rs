@@ -71,15 +71,8 @@ pub enum Command {
     Alias(AliasArgs),
     /// Migrate from the legacy claude-switch tool.
     Migrate(MigrateArgs),
-    /// Manage the master profile (shared skills/commands/agents/CLAUDE.md).
-    #[command(subcommand)]
-    Master(MasterCmd),
-    /// Override a master path for the current profile.
-    Override(OverrideArgs),
-    /// Drop an override; restore the master symlink.
-    Unoverride(OverrideArgs),
-    /// Promote a profile-local skill into the master.
-    ShareSkill(NameArg),
+    /// Designate a profile as master, show status, or clear the designation.
+    Master(MasterArgs),
     /// Bind the current working directory to a profile.
     Link(LinkArgs),
     /// Show all cwd→profile bindings.
@@ -176,19 +169,14 @@ pub struct MigrateArgs {
     pub from: Option<std::path::PathBuf>,
 }
 
-#[derive(Debug, Subcommand)]
-pub enum MasterCmd {
-    /// Move ~/.claude shared content under cs's master and symlink it back.
-    Init,
-    /// Print the master symlink status.
-    Status,
-}
-
 #[derive(Debug, Args)]
-pub struct OverrideArgs {
-    pub profile: String,
-    /// Path within the master to override (e.g. skills/foo).
-    pub path: String,
+pub struct MasterArgs {
+    /// Profile to designate as master. Omit to print status.
+    #[arg(conflicts_with = "unset")]
+    pub name: Option<String>,
+    /// Clear the master designation; move shared content back to ~/.claude.
+    #[arg(long, conflicts_with = "name")]
+    pub unset: bool,
 }
 
 #[derive(Debug, Args)]
@@ -242,9 +230,6 @@ pub const KNOWN_SUBCOMMANDS: &[&str] = &[
     "alias",
     "migrate",
     "master",
-    "override",
-    "unoverride",
-    "share-skill",
     "link",
     "links",
     "uninstall",

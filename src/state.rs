@@ -12,6 +12,9 @@ pub struct State {
     pub active: Option<String>,
     pub previous: Option<String>,
     pub default: Option<String>,
+    /// Profile that owns the shared skills/commands/agents/CLAUDE.md tree.
+    #[serde(default)]
+    pub master: Option<String>,
     /// Milliseconds since epoch.
     pub switched_at_ms: Option<u64>,
     /// Milliseconds since epoch — earliest jsonl mtime to attribute to `active`.

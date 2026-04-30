@@ -48,30 +48,30 @@ We **keep this layout** for compatibility and add on top.
 
 Three categories, named explicitly so we never swap the wrong thing.
 
-**Master (shared, symlinked into `~/.claude/`):** `skills/`, `commands/`, `agents/`, `CLAUDE.md`. Adopted on `cs master init` from whatever currently exists — a missing `agents/` is fine.
+**Master (shared, symlinked into `~/.claude/`):** `skills/`, `commands/`, `agents/`, `CLAUDE.md`. One of your saved profiles is designated the **master profile**; the four shared paths live inside that profile's directory and are symlinked into `~/.claude/`. Other profiles pick them up via the same symlinks. A missing `agents/` is fine.
 
-**Per-profile (swapped on switch):** `settings.json` (which already carries `enabledPlugins`), an optional `env` file sourced into the shell, and any user-declared overrides. We do **not** swap the entire `plugins/` directory — plugin enablement lives in `settings.json`; the cached repos under `plugins/` are content-addressed and harmless to share.
+**Per-profile (swapped on switch):** `settings.json` (which already carries `enabledPlugins`) and an optional `env` file sourced into the shell. We do **not** swap the entire `plugins/` directory — plugin enablement lives in `settings.json`; the cached repos under `plugins/` are content-addressed and harmless to share.
 
 **Machine-local (never touched):** `settings.local.json` (permissions, MCP enables), and runtime/cache dirs — `telemetry/`, `statsig/`, `todos/`, `tasks/`, `sessions/`, `session-env/`, `shell-snapshots/`, `paste-cache/`, `file-history/`, `history.jsonl`, `policy-limits.json`, `projects/` (see §15 Q3). These follow the machine, not the account.
 
 ```
 ~/.claude/                  ← what Claude Code reads (path unchanged)
-├── skills/      → ~/.claude-cs/master/skills/      (symlink)
-├── commands/    → ~/.claude-cs/master/commands/    (symlink)
-├── agents/      → ~/.claude-cs/master/agents/      (symlink, if present)
-├── CLAUDE.md    → ~/.claude-cs/master/CLAUDE.md    (symlink)
-├── settings.json                                    ← per-profile, swapped
-├── settings.local.json                              ← machine-local, untouched
-└── (runtime dirs)                                   ← machine-local, untouched
+├── skills/      → ~/.claude-cs/profiles/<master>/skills/      (symlink)
+├── commands/    → ~/.claude-cs/profiles/<master>/commands/    (symlink)
+├── agents/      → ~/.claude-cs/profiles/<master>/agents/      (symlink, if present)
+├── CLAUDE.md    → ~/.claude-cs/profiles/<master>/CLAUDE.md    (symlink)
+├── settings.json                                              ← per-profile, swapped
+├── settings.local.json                                        ← machine-local, untouched
+└── (runtime dirs)                                             ← machine-local, untouched
 
 ~/.claude-cs/
-├── master/                 ← shared across all profiles
-└── profiles/<name>/        ← settings.json, env, overrides
+├── profiles/
+│   ├── <master>/        ← skills/, commands/, agents/, CLAUDE.md, settings.json, env
+│   └── <other>/         ← settings.json, env (inherits the four via master's symlinks)
+└── state.json           ← {active, previous, default, master, …}
 ```
 
-**Override:** `cs override <profile> skills/foo` copies master's `foo` into the profile and rewrites that one symlink. Reversible.
-
-**First run:** existing master-eligible content under `~/.claude/` is moved into `~/.claude-cs/master/` and replaced with symlinks. Reversible via `cs uninstall`.
+**First run:** `cs master <name>` moves existing master-eligible content under `~/.claude/` into `~/.claude-cs/profiles/<name>/` and replaces the originals with symlinks. Reversible via `cs master --unset` or `cs uninstall`.
 
 ## 6. CLI surface
 
@@ -90,10 +90,10 @@ Three categories, named explicitly so we never swap the wrong thing.
 - `cs export <name>` / `cs import <file>` — age-encrypted bundle for moving across machines
 - `cs default <name>` — set the profile used by `cs default-go` (renamed for clarity; original `claude-switch` overloaded `default`)
 
-**Master & overrides**
-- `cs master init` / `cs master status`
-- `cs override <profile> <path>` / `cs unoverride <profile> <path>`
-- `cs share-skill <name>` — promote a profile-local skill into master
+**Master profile**
+- `cs master <name>` — designate `<name>` as master (or change master)
+- `cs master` — show status (which profile is master, per-item symlink state)
+- `cs master --unset` — clear designation; move shared content back to `~/.claude`
 
 **Usage**
 - `cs status` — one-shot snapshot for scripts
@@ -204,10 +204,15 @@ Single-screen, keyboard-driven, ~1s refresh, ~30 lines tall.
 | M | Scope |
 |---|---|
 | M1 | Core swap: `cs <profile>`, `save`, `list`, `rm`, `refresh`, `status`, `doctor`. Keychain compat. |
-| M2 | Master profile: `master init`, symlink layout, `override`/`unoverride`, `uninstall` reverses cleanly. |
+| M2 | Master profile: `cs master <name>` / `--unset`, symlink layout, `uninstall` reverses cleanly. |
 | M3 | TUI: profile pane, session pane, key-driven switch, fs-watch refresh, ccusage integration. |
 | M4 | QoL v1 cut: cwd auto-switch, prompt indicator, expiry/quota notifications, audit log. |
 | M5 | Linux secret-service backend; `export`/`import`; brew release. |
+
+The original M2 plan included per-profile overrides and a `share-skill` command;
+those were dropped because the master-as-profile model already lets a profile
+diverge by simply not being master, and per-path overrides added file-tracking
+complexity without a clear use case.
 
 ## 15. Open questions
 

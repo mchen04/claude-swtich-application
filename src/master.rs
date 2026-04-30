@@ -5,15 +5,14 @@ use serde::Serialize;
 
 use crate::backup::{BackupAction, Manifest};
 use crate::error::{Error, Result};
-use crate::paths::Paths;
+use crate::paths::{Paths, SHARED_ITEMS};
+use crate::state::State;
 use crate::symlinks;
-
-/// Items we share across profiles via master.
-pub const CANDIDATES: &[&str] = &["skills", "commands", "agents", "CLAUDE.md"];
 
 #[derive(Debug, Serialize)]
 pub struct MasterStatus {
-    pub master_dir: PathBuf,
+    pub master: Option<String>,
+    pub master_dir: Option<PathBuf>,
     pub items: Vec<MasterItem>,
 }
 
@@ -21,133 +20,335 @@ pub struct MasterStatus {
 pub struct MasterItem {
     pub name: String,
     pub claude_path: PathBuf,
-    pub master_path: PathBuf,
+    pub master_path: Option<PathBuf>,
     pub state: ItemState,
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ItemState {
+    /// Path is missing in `~/.claude/`.
     Missing,
-    NotInMaster,
+    /// Plain file or directory in `~/.claude/` (no master designated, or shadowing).
+    Local,
+    /// Symlink correctly pointing into the master profile's dir, target exists.
     Symlinked,
-    SymlinkOutsideMaster,
-    #[allow(dead_code)] // reserved for future "regular file blocks the move" reporting
-    BlockingFile,
+    /// Symlink into the master profile's dir, but target is missing.
+    SymlinkBroken,
+    /// Symlink pointing somewhere else (not into the designated master profile).
+    SymlinkForeign,
 }
 
-pub fn status(paths: &Paths) -> Result<MasterStatus> {
-    let master_dir = paths.master_dir();
+pub fn status(paths: &Paths, state: &State) -> Result<MasterStatus> {
+    let master = state.master.clone();
+    let master_dir = master.as_deref().map(|m| paths.profile_dir(m));
     let mut items = Vec::new();
-    for name in CANDIDATES {
+    for name in SHARED_ITEMS {
         let claude_path = paths.claude_home.join(name);
-        let master_path = master_dir.join(name);
-        let state = classify(&claude_path, &master_path, &master_dir);
+        let master_path = master_dir.as_ref().map(|d| d.join(name));
+        let item_state = classify(&claude_path, master_dir.as_deref(), master_path.as_deref());
         items.push(MasterItem {
             name: (*name).to_string(),
             claude_path,
             master_path,
-            state,
+            state: item_state,
         });
     }
-    Ok(MasterStatus { master_dir, items })
+    Ok(MasterStatus { master, master_dir, items })
 }
 
-fn classify(claude_path: &Path, master_path: &Path, master_dir: &Path) -> ItemState {
-    let meta = fs::symlink_metadata(claude_path);
-    match meta {
-        Err(_) => ItemState::Missing,
-        Ok(m) if m.file_type().is_symlink() => {
-            if symlinks::points_into(claude_path, master_dir) {
-                if master_path.exists() {
-                    ItemState::Symlinked
-                } else {
-                    ItemState::SymlinkOutsideMaster
-                }
-            } else {
-                ItemState::SymlinkOutsideMaster
-            }
-        }
-        Ok(_) => ItemState::NotInMaster,
+fn classify(claude_path: &Path, master_dir: Option<&Path>, master_path: Option<&Path>) -> ItemState {
+    let meta = match fs::symlink_metadata(claude_path) {
+        Ok(m) => m,
+        Err(_) => return ItemState::Missing,
+    };
+    if !meta.file_type().is_symlink() {
+        return ItemState::Local;
+    }
+    let Some(master_dir) = master_dir else {
+        return ItemState::SymlinkForeign;
+    };
+    if !symlinks::points_into(claude_path, master_dir) {
+        return ItemState::SymlinkForeign;
+    }
+    match master_path {
+        Some(p) if p.exists() => ItemState::Symlinked,
+        _ => ItemState::SymlinkBroken,
     }
 }
 
 #[derive(Debug, Serialize, Default)]
-pub struct InitReport {
+pub struct SetReport {
+    pub master: String,
+    pub previous_master: Option<String>,
     pub moved: Vec<String>,
     pub already: Vec<String>,
     pub skipped_empty: Vec<String>,
-    pub blocked: Vec<String>,
     pub manifest_path: Option<PathBuf>,
 }
 
-pub fn init(paths: &Paths, dry_run: bool) -> Result<InitReport> {
-    let master_dir = paths.master_dir();
-    if !dry_run {
-        fs::create_dir_all(&master_dir).map_err(|e| Error::io_at(&master_dir, e))?;
-    }
-    let mut report = InitReport::default();
-    let mut manifest = Manifest::new("master-init");
+/// Designate `name` as the master profile. Handles both first-time set and
+/// master-change in one function (dispatch on whether `state.master` is currently set).
+pub fn set(paths: &Paths, state: &mut State, name: &str, dry_run: bool) -> Result<SetReport> {
+    let new_dir = paths.profile_dir(name);
+    let mut report = SetReport {
+        master: name.to_string(),
+        previous_master: state.master.clone(),
+        ..SetReport::default()
+    };
 
-    for name in CANDIDATES {
-        let claude_path = paths.claude_home.join(name);
-        let master_path = master_dir.join(name);
-        let state = classify(&claude_path, &master_path, &master_dir);
-        match state {
-            ItemState::Missing => {
-                report.skipped_empty.push((*name).to_string());
-            }
-            ItemState::Symlinked => {
-                report.already.push((*name).to_string());
-            }
-            ItemState::SymlinkOutsideMaster => {
-                report.blocked.push(format!(
-                    "{} is a symlink not pointing into master; remove it manually first",
-                    claude_path.display()
-                ));
-            }
-            ItemState::BlockingFile => {
-                report.blocked.push(format!(
-                    "{} blocks the move; resolve manually",
-                    claude_path.display()
-                ));
-            }
-            ItemState::NotInMaster => {
-                if is_empty_dir(&claude_path) {
-                    report.skipped_empty.push((*name).to_string());
-                    continue;
+    if !dry_run {
+        fs::create_dir_all(&new_dir).map_err(|e| Error::io_at(&new_dir, e))?;
+    }
+
+    match state.master.clone() {
+        None => set_first_time(paths, state, name, &new_dir, dry_run, &mut report)?,
+        Some(prev) if prev == name => {
+            // Re-designating the same master is a no-op (idempotent).
+            for item in SHARED_ITEMS {
+                let claude_path = paths.claude_home.join(item);
+                let master_path = new_dir.join(item);
+                match classify(&claude_path, Some(&new_dir), Some(&master_path)) {
+                    ItemState::Symlinked => report.already.push((*item).to_string()),
+                    ItemState::Missing => report.skipped_empty.push((*item).to_string()),
+                    _ => {}
                 }
-                if master_path.exists() {
-                    report.blocked.push(format!(
-                        "{} already exists in master — manual reconciliation required",
-                        master_path.display()
-                    ));
-                    continue;
-                }
-                if dry_run {
-                    report.moved.push((*name).to_string());
-                    continue;
-                }
-                move_path(&claude_path, &master_path)?;
-                symlinks::replace(&master_path, &claude_path)?;
-                manifest.push(BackupAction::FsMove {
-                    from: claude_path.clone(),
-                    to: master_path.clone(),
-                });
-                manifest.push(BackupAction::SymlinkCreate {
-                    link: claude_path.clone(),
-                    target: master_path.clone(),
-                });
-                report.moved.push((*name).to_string());
             }
+        }
+        Some(prev) => set_change_master(paths, state, &prev, name, &new_dir, dry_run, &mut report)?,
+    }
+
+    Ok(report)
+}
+
+fn set_first_time(
+    paths: &Paths,
+    state: &mut State,
+    name: &str,
+    new_dir: &Path,
+    dry_run: bool,
+    report: &mut SetReport,
+) -> Result<()> {
+    let mut manifest = Manifest::new("master-set").with_master(name);
+
+    for item in SHARED_ITEMS {
+        let claude_path = paths.claude_home.join(item);
+        let master_path = new_dir.join(item);
+        let meta = fs::symlink_metadata(&claude_path).ok();
+        let Some(meta) = meta else {
+            report.skipped_empty.push((*item).to_string());
+            continue;
+        };
+        if meta.file_type().is_symlink() {
+            // Pre-existing symlink — leave as-is and warn via state.
+            if symlinks::points_into(&claude_path, new_dir) {
+                report.already.push((*item).to_string());
+            } else {
+                report.skipped_empty.push((*item).to_string());
+            }
+            continue;
+        }
+        if meta.file_type().is_dir() && is_empty_dir(&claude_path) {
+            // Empty directory: create matching empty dir under master, replace with link.
+            if dry_run {
+                report.moved.push((*item).to_string());
+                continue;
+            }
+            fs::create_dir_all(&master_path).map_err(|e| Error::io_at(&master_path, e))?;
+            fs::remove_dir(&claude_path).map_err(|e| Error::io_at(&claude_path, e))?;
+            symlinks::replace(&master_path, &claude_path)?;
+            manifest.push(BackupAction::FsMove {
+                from: claude_path.clone(),
+                to: master_path.clone(),
+            });
+            manifest.push(BackupAction::SymlinkCreate {
+                link: claude_path.clone(),
+                target: master_path.clone(),
+            });
+            report.moved.push((*item).to_string());
+            continue;
+        }
+        if master_path.exists() {
+            return Err(Error::Other(format!(
+                "{} already exists in master profile — manual reconciliation required",
+                master_path.display()
+            )));
+        }
+        if dry_run {
+            report.moved.push((*item).to_string());
+            continue;
+        }
+        move_path(&claude_path, &master_path)?;
+        symlinks::replace(&master_path, &claude_path)?;
+        manifest.push(BackupAction::FsMove {
+            from: claude_path.clone(),
+            to: master_path.clone(),
+        });
+        manifest.push(BackupAction::SymlinkCreate {
+            link: claude_path.clone(),
+            target: master_path.clone(),
+        });
+        report.moved.push((*item).to_string());
+    }
+
+    if !dry_run {
+        if !manifest.actions.is_empty() {
+            let path = manifest.write(paths)?;
+            report.manifest_path = Some(path);
+        }
+        state.master = Some(name.to_string());
+        state.save(&paths.state_file())?;
+    }
+    Ok(())
+}
+
+fn set_change_master(
+    paths: &Paths,
+    state: &mut State,
+    prev_name: &str,
+    new_name: &str,
+    new_dir: &Path,
+    dry_run: bool,
+    report: &mut SetReport,
+) -> Result<()> {
+    let prev_dir = paths.profile_dir(prev_name);
+
+    // Refuse if any of the four candidates already exists under the new dir.
+    for item in SHARED_ITEMS {
+        let candidate = new_dir.join(item);
+        if candidate.exists() {
+            return Err(Error::Other(format!(
+                "cannot change master to `{new_name}`: {} already exists; \
+                 remove it manually or pick a different profile",
+                candidate.display()
+            )));
         }
     }
 
-    if !dry_run && !manifest.actions.is_empty() {
-        let path = manifest.write(paths)?;
-        report.manifest_path = Some(path);
+    let mut manifest = Manifest::new("master-change").with_master(new_name);
+
+    for item in SHARED_ITEMS {
+        let from = prev_dir.join(item);
+        let to = new_dir.join(item);
+        let claude_path = paths.claude_home.join(item);
+        if !from.exists() {
+            // Old master didn't have this item; skip.
+            continue;
+        }
+        if dry_run {
+            report.moved.push((*item).to_string());
+            continue;
+        }
+        move_path(&from, &to)?;
+        manifest.push(BackupAction::FsMove { from: from.clone(), to: to.clone() });
+        // Retarget the ~/.claude/* symlink to the new location.
+        symlinks::replace(&to, &claude_path)?;
+        manifest.push(BackupAction::SymlinkCreate {
+            link: claude_path.clone(),
+            target: to.clone(),
+        });
+        report.moved.push((*item).to_string());
+    }
+
+    if !dry_run {
+        if !manifest.actions.is_empty() {
+            let path = manifest.write(paths)?;
+            report.manifest_path = Some(path);
+        }
+        state.master = Some(new_name.to_string());
+        state.save(&paths.state_file())?;
+    }
+    Ok(())
+}
+
+#[derive(Debug, Serialize, Default)]
+pub struct UnsetReport {
+    pub previous_master: Option<String>,
+    pub restored: Vec<String>,
+    pub manifest_path: Option<PathBuf>,
+}
+
+/// Clear the master designation: move content from the master profile dir back
+/// to `~/.claude/`, drop the four symlinks, and clear `state.master`.
+pub fn unset(paths: &Paths, state: &mut State, dry_run: bool) -> Result<UnsetReport> {
+    let mut report = UnsetReport {
+        previous_master: state.master.clone(),
+        ..UnsetReport::default()
+    };
+    let Some(master_name) = state.master.clone() else {
+        return Ok(report); // No-op.
+    };
+    let master_dir = paths.profile_dir(&master_name);
+    let mut manifest = Manifest::new("master-unset").with_master(&master_name);
+
+    for item in SHARED_ITEMS {
+        let claude_path = paths.claude_home.join(item);
+        let master_path = master_dir.join(item);
+        // Drop the symlink first (if it exists and points into master).
+        let is_symlink = fs::symlink_metadata(&claude_path)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false);
+        let points_in = is_symlink && symlinks::points_into(&claude_path, &master_dir);
+        if dry_run {
+            if points_in && master_path.exists() {
+                report.restored.push((*item).to_string());
+            }
+            continue;
+        }
+        if points_in {
+            symlinks::remove(&claude_path)?;
+            manifest.push(BackupAction::SymlinkRemove {
+                link: claude_path.clone(),
+                target: master_path.clone(),
+            });
+        }
+        if master_path.exists() {
+            // Move content back to ~/.claude.
+            move_path(&master_path, &claude_path)?;
+            manifest.push(BackupAction::FsMove {
+                from: master_path.clone(),
+                to: claude_path.clone(),
+            });
+            report.restored.push((*item).to_string());
+        }
+    }
+
+    if !dry_run {
+        if !manifest.actions.is_empty() {
+            let path = manifest.write(paths)?;
+            report.manifest_path = Some(path);
+        }
+        state.master = None;
+        state.save(&paths.state_file())?;
     }
     Ok(report)
+}
+
+/// Retarget the `~/.claude/{skills,commands,agents,CLAUDE.md}` symlinks to a
+/// new master profile directory. Used when the master profile is renamed.
+pub fn retarget_symlinks(paths: &Paths, new_master: &str) -> Result<Vec<BackupAction>> {
+    let new_dir = paths.profile_dir(new_master);
+    let mut actions = Vec::new();
+    for item in SHARED_ITEMS {
+        let claude_path = paths.claude_home.join(item);
+        let new_target = new_dir.join(item);
+        let meta = match fs::symlink_metadata(&claude_path) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        if !meta.file_type().is_symlink() {
+            continue;
+        }
+        if !new_target.exists() {
+            continue;
+        }
+        symlinks::replace(&new_target, &claude_path)?;
+        actions.push(BackupAction::SymlinkCreate {
+            link: claude_path,
+            target: new_target,
+        });
+    }
+    Ok(actions)
 }
 
 #[derive(Debug, Serialize, Default)]
@@ -159,107 +360,43 @@ pub struct UninstallReport {
 
 pub fn uninstall(paths: &Paths, keep_master: bool, dry_run: bool) -> Result<UninstallReport> {
     let mut report = UninstallReport::default();
-    let manifest_path = latest_master_manifest(paths)?;
-    if let Some(p) = &manifest_path {
-        if dry_run {
-            eprintln!("would replay {}", p.display());
-        } else {
-            replay_master_manifest(p, paths, keep_master, &mut report)?;
-            report.manifest_replayed = Some(p.clone());
-        }
-    } else {
-        // No manifest: best-effort by inspecting current symlinks.
-        let status = status(paths)?;
+    let state_path = paths.state_file();
+    let mut state = State::load(&state_path).unwrap_or_default();
+    let Some(master_name) = state.master.clone() else {
+        // Nothing designated; only stray symlinks (if any) need cleanup.
+        let status = status(paths, &state)?;
         for item in status.items {
-            if item.state == ItemState::Symlinked && !dry_run {
-                if !keep_master && item.master_path.exists() {
-                    move_path(&item.master_path, &item.claude_path)?;
-                    report.restored.push(item.name);
-                } else {
-                    symlinks::remove(&item.claude_path)?;
-                    report.left_in_place.push(item.name);
-                }
+            if matches!(item.state, ItemState::SymlinkBroken | ItemState::SymlinkForeign)
+                && !dry_run
+            {
+                let _ = symlinks::remove(&item.claude_path);
             }
         }
+        return Ok(report);
+    };
+    let master_dir = paths.profile_dir(&master_name);
+
+    if keep_master {
+        // Drop symlinks, leave content in the master profile dir.
+        if !dry_run {
+            for item in SHARED_ITEMS {
+                let claude_path = paths.claude_home.join(item);
+                let is_symlink = fs::symlink_metadata(&claude_path)
+                    .map(|m| m.file_type().is_symlink())
+                    .unwrap_or(false);
+                if is_symlink && symlinks::points_into(&claude_path, &master_dir) {
+                    symlinks::remove(&claude_path)?;
+                    report.left_in_place.push((*item).to_string());
+                }
+            }
+            eprintln!("left in profile `{}`", master_name);
+        }
+    } else if !dry_run {
+        let unset_report = unset(paths, &mut state, false)?;
+        report.restored = unset_report.restored;
+        report.manifest_replayed = unset_report.manifest_path;
     }
     Ok(report)
-}
-
-fn latest_master_manifest(paths: &Paths) -> Result<Option<PathBuf>> {
-    let backups = paths.backups_dir();
-    if !backups.exists() {
-        return Ok(None);
-    }
-    let mut best: Option<(String, PathBuf)> = None;
-    for entry in fs::read_dir(&backups).map_err(|e| Error::io_at(&backups, e))? {
-        let entry = entry.map_err(|e| Error::io_at(&backups, e))?;
-        let path = entry.path().join("manifest.json");
-        if !path.exists() {
-            continue;
-        }
-        let bytes = fs::read(&path).map_err(|e| Error::io_at(&path, e))?;
-        let m: Manifest = serde_json::from_slice(&bytes)?;
-        if m.op == "master-init" {
-            let key = entry.file_name().to_string_lossy().into_owned();
-            if best.as_ref().map(|(k, _)| k.as_str() < key.as_str()).unwrap_or(true) {
-                best = Some((key, path));
-            }
-        }
-    }
-    Ok(best.map(|(_, p)| p))
-}
-
-fn replay_master_manifest(
-    manifest_path: &Path,
-    paths: &Paths,
-    keep_master: bool,
-    report: &mut UninstallReport,
-) -> Result<()> {
-    let bytes = fs::read(manifest_path).map_err(|e| Error::io_at(manifest_path, e))?;
-    let manifest: Manifest = serde_json::from_slice(&bytes)?;
-    // Reverse order — undo SymlinkCreate before FsMove.
-    let mut actions: Vec<BackupAction> = manifest.actions.clone();
-    actions.reverse();
-    for action in actions {
-        match action {
-            BackupAction::SymlinkCreate { link, .. } => {
-                if let Err(e) = symlinks::remove(&link) {
-                    eprintln!("warn: could not remove symlink {}: {e}", link.display());
-                }
-            }
-            BackupAction::FsMove { from, to } => {
-                // `from` is the original (~/.claude/...), `to` is master path. Undo: move
-                // master back to ~/.claude.
-                if !keep_master {
-                    if !from.exists() {
-                        if to.exists() {
-                            move_path(&to, &from)?;
-                            report
-                                .restored
-                                .push(from.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default());
-                        }
-                    } else {
-                        // Original path already restored (probably user undid manually).
-                    }
-                } else {
-                    report.left_in_place.push(
-                        from.file_name()
-                            .map(|s| s.to_string_lossy().into_owned())
-                            .unwrap_or_default(),
-                    );
-                }
-            }
-            _ => {}
-        }
-    }
-    // Optionally clean the empty master dir if everything was restored.
-    if !keep_master {
-        let master = paths.master_dir();
-        if master.exists() && fs::read_dir(&master).map(|i| i.count() == 0).unwrap_or(false) {
-            let _ = fs::remove_dir(&master);
-        }
-    }
-    Ok(())
 }
 
 fn is_empty_dir(p: &Path) -> bool {

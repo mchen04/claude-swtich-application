@@ -42,6 +42,9 @@ pub struct Manifest {
     pub op: String,
     pub actor: String,
     pub actions: Vec<BackupAction>,
+    /// Profile that was master at the time the manifest was written.
+    #[serde(default)]
+    pub master_profile: Option<String>,
 }
 
 impl Manifest {
@@ -51,7 +54,13 @@ impl Manifest {
             op: op.into(),
             actor: format!("cs {}", env!("CARGO_PKG_VERSION")),
             actions: Vec::new(),
+            master_profile: None,
         }
+    }
+
+    pub fn with_master(mut self, name: impl Into<String>) -> Self {
+        self.master_profile = Some(name.into());
+        self
     }
 
     pub fn push(&mut self, a: BackupAction) {

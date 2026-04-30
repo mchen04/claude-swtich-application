@@ -19,7 +19,7 @@ pub fn run(paths: &Paths, global: &GlobalOpts, args: &UninstallArgs) -> Result<(
         eprintln!("restored {n}");
     }
     for n in &report.left_in_place {
-        eprintln!("left in master: {n}");
+        eprintln!("left in profile: {n}");
     }
 
     // Remove shell wrapper from rc files (best-effort, idempotent).

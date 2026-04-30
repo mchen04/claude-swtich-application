@@ -9,6 +9,11 @@ use crate::paths::Paths;
 use crate::state::State;
 
 pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &NameArg) -> Result<()> {
+    let state_pre = State::load(&paths.state_file()).unwrap_or_default();
+    if state_pre.master.as_deref() == Some(args.name.as_str()) {
+        return Err(Error::MasterProfileLocked(args.name.clone()));
+    }
+
     let target = keychain::profile_account(&args.name);
     let existing = kc.read(&target).map_err(|_| Error::ProfileNotFound(args.name.clone()))?;
 

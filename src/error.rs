@@ -47,6 +47,12 @@ pub enum Error {
     #[error("operation refused: {0}")]
     Refused(String),
 
+    #[error("no master profile designated")]
+    NoMasterProfile,
+
+    #[error("`{0}` is the master profile; run `cs master --unset` first")]
+    MasterProfileLocked(String),
+
     #[error("{0}")]
     Other(String),
 }

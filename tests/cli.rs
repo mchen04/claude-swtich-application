@@ -344,7 +344,7 @@ fn default_then_default_go() {
     assert_eq!(state["default"], "a");
 }
 
-// --- Phase D: master init / uninstall round-trip ------------------------------
+// --- Phase D: master profile ---------------------------------------------------
 
 fn write_seed(claude_home: &std::path::Path) {
     std::fs::create_dir_all(claude_home.join("skills/foo")).unwrap();
@@ -379,82 +379,264 @@ fn dir_snapshot(root: &std::path::Path) -> std::collections::BTreeMap<String, Ve
     map
 }
 
-#[test]
-fn master_init_then_uninstall_is_byte_clean() {
-    let (_dir, claude_home, cs_home) = isolated();
+fn master_env(claude_home: &std::path::Path, cs_home: &std::path::Path, fixture: &std::path::Path) -> Command {
+    let mut c = cs();
+    c.env("CLAUDE_HOME", claude_home)
+        .env("CS_HOME", cs_home)
+        .env("CS_TEST_KEYCHAIN_FIXTURE", fixture);
+    c
+}
+
+fn seeded_master_setup() -> (TempDir, PathBuf, PathBuf, PathBuf) {
+    let (dir, claude_home, cs_home) = isolated();
     write_seed(&claude_home);
+    let blob = fake_oauth("personal@example.com", 3600);
+    // Only the canonical entry — `cs save personal` will create the profile entry.
+    let fixture = fixture_path(dir.path(), &[("test-user", &blob)]);
+    (dir, claude_home, cs_home, fixture)
+}
+
+#[test]
+fn master_set_then_uninstall_is_byte_clean() {
+    let (dir, claude_home, cs_home, fixture) = seeded_master_setup();
+    let _ = dir;
     let before = dir_snapshot(&claude_home);
 
-    cs()
-        .env("CLAUDE_HOME", &claude_home)
-        .env("CS_HOME", &cs_home)
-        .args(["master", "init"])
+    master_env(&claude_home, &cs_home, &fixture)
+        .args(["save", "personal"])
+        .assert()
+        .success();
+    master_env(&claude_home, &cs_home, &fixture)
+        .args(["master", "personal"])
         .assert()
         .success();
 
-    // Validate symlinks now exist.
-    assert!(std::fs::symlink_metadata(claude_home.join("skills"))
-        .unwrap()
-        .file_type()
-        .is_symlink());
-    assert!(std::fs::symlink_metadata(claude_home.join("commands"))
-        .unwrap()
-        .file_type()
-        .is_symlink());
+    // Validate symlinks now exist and point into the personal profile dir.
+    let target = std::fs::read_link(claude_home.join("skills")).unwrap();
+    assert!(
+        target.starts_with(cs_home.join("profiles/personal")),
+        "skills symlink should point into profiles/personal: {}",
+        target.display()
+    );
     assert!(std::fs::symlink_metadata(claude_home.join("CLAUDE.md"))
         .unwrap()
         .file_type()
         .is_symlink());
 
-    cs()
-        .env("CLAUDE_HOME", &claude_home)
-        .env("CS_HOME", &cs_home)
+    master_env(&claude_home, &cs_home, &fixture)
         .args(["uninstall"])
         .assert()
         .success();
 
     let after = dir_snapshot(&claude_home);
-    assert_eq!(before, after, "init→uninstall is not byte-clean");
+    assert_eq!(before, after, "master set→uninstall is not byte-clean");
 }
 
 #[test]
-fn master_init_idempotent() {
-    let (_dir, claude_home, cs_home) = isolated();
-    write_seed(&claude_home);
+fn master_set_idempotent() {
+    let (dir, claude_home, cs_home, fixture) = seeded_master_setup();
+    let _ = dir;
 
-    cs()
-        .env("CLAUDE_HOME", &claude_home)
-        .env("CS_HOME", &cs_home)
-        .args(["master", "init"])
+    master_env(&claude_home, &cs_home, &fixture)
+        .args(["save", "personal"])
         .assert()
         .success();
-    // Second init should not move anything; should report "already symlinked".
-    cs()
-        .env("CLAUDE_HOME", &claude_home)
-        .env("CS_HOME", &cs_home)
-        .args(["master", "init"])
+    master_env(&claude_home, &cs_home, &fixture)
+        .args(["master", "personal"])
+        .assert()
+        .success();
+    // Second invocation: same master, no-op.
+    master_env(&claude_home, &cs_home, &fixture)
+        .args(["master", "personal"])
         .assert()
         .success()
         .stdout(predicate::str::contains("already symlinked"));
 }
 
 #[test]
-fn master_status_reports_states() {
-    let (_dir, claude_home, cs_home) = isolated();
-    write_seed(&claude_home);
+fn master_status_reports_designated_master() {
+    let (dir, claude_home, cs_home, fixture) = seeded_master_setup();
+    let _ = dir;
 
-    let output = cs()
-        .env("CLAUDE_HOME", &claude_home)
-        .env("CS_HOME", &cs_home)
-        .args(["master", "status", "--json"])
+    master_env(&claude_home, &cs_home, &fixture)
+        .args(["save", "personal"])
+        .assert()
+        .success();
+    master_env(&claude_home, &cs_home, &fixture)
+        .args(["master", "personal"])
+        .assert()
+        .success();
+
+    let output = master_env(&claude_home, &cs_home, &fixture)
+        .args(["master", "--json"])
         .assert()
         .success()
         .get_output()
         .stdout
         .clone();
     let v: serde_json::Value = serde_json::from_slice(&output).unwrap();
-    assert!(v["items"].is_array());
+    assert_eq!(v["master"], "personal");
     assert_eq!(v["items"].as_array().unwrap().len(), 4);
+}
+
+#[test]
+fn master_change_moves_content() {
+    let (dir, claude_home, cs_home) = isolated();
+    write_seed(&claude_home);
+    let blob = fake_oauth("a@example.com", 3600);
+    let fixture = fixture_path(dir.path(), &[("test-user", &blob)]);
+
+    master_env(&claude_home, &cs_home, &fixture)
+        .args(["save", "personal"])
+        .assert()
+        .success();
+    master_env(&claude_home, &cs_home, &fixture)
+        .args(["save", "work"])
+        .assert()
+        .success();
+    master_env(&claude_home, &cs_home, &fixture)
+        .args(["master", "personal"])
+        .assert()
+        .success();
+
+    // Switch master to work — work has none of the four candidates.
+    master_env(&claude_home, &cs_home, &fixture)
+        .args(["master", "work"])
+        .assert()
+        .success();
+
+    let target = std::fs::read_link(claude_home.join("skills")).unwrap();
+    assert!(
+        target.starts_with(cs_home.join("profiles/work")),
+        "skills should now point into work: {}",
+        target.display()
+    );
+    assert!(cs_home.join("profiles/work/skills/foo/SKILL.md").exists());
+    assert!(!cs_home.join("profiles/personal/skills").exists());
+
+    let state: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(cs_home.join("state.json")).unwrap()).unwrap();
+    assert_eq!(state["master"], "work");
+}
+
+#[test]
+fn master_change_refuses_when_target_non_empty() {
+    let (dir, claude_home, cs_home) = isolated();
+    write_seed(&claude_home);
+    let blob = fake_oauth("a@example.com", 3600);
+    let fixture = fixture_path(dir.path(), &[("test-user", &blob)]);
+
+    master_env(&claude_home, &cs_home, &fixture)
+        .args(["save", "personal"])
+        .assert()
+        .success();
+    master_env(&claude_home, &cs_home, &fixture)
+        .args(["save", "work"])
+        .assert()
+        .success();
+    master_env(&claude_home, &cs_home, &fixture)
+        .args(["master", "personal"])
+        .assert()
+        .success();
+
+    // Manually plant content in the work profile dir to block the change.
+    std::fs::create_dir_all(cs_home.join("profiles/work/skills/blocker")).unwrap();
+    std::fs::write(
+        cs_home.join("profiles/work/skills/blocker/SKILL.md"),
+        b"blocker\n",
+    )
+    .unwrap();
+
+    master_env(&claude_home, &cs_home, &fixture)
+        .args(["master", "work"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("already exists"));
+}
+
+#[test]
+fn rm_master_profile_refuses() {
+    let (dir, claude_home, cs_home, fixture) = seeded_master_setup();
+    let _ = dir;
+
+    master_env(&claude_home, &cs_home, &fixture)
+        .args(["save", "personal"])
+        .assert()
+        .success();
+    master_env(&claude_home, &cs_home, &fixture)
+        .args(["master", "personal"])
+        .assert()
+        .success();
+
+    master_env(&claude_home, &cs_home, &fixture)
+        .args(["rm", "personal"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("master profile"))
+        .stderr(predicate::str::contains("cs master --unset"));
+}
+
+#[test]
+fn rename_master_profile_updates_state_and_symlinks() {
+    let (dir, claude_home, cs_home, fixture) = seeded_master_setup();
+    let _ = dir;
+
+    master_env(&claude_home, &cs_home, &fixture)
+        .args(["save", "personal"])
+        .assert()
+        .success();
+    master_env(&claude_home, &cs_home, &fixture)
+        .args(["master", "personal"])
+        .assert()
+        .success();
+    master_env(&claude_home, &cs_home, &fixture)
+        .args(["rename", "personal", "personal2"])
+        .assert()
+        .success();
+
+    let state: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(cs_home.join("state.json")).unwrap()).unwrap();
+    assert_eq!(state["master"], "personal2");
+
+    let target = std::fs::read_link(claude_home.join("skills")).unwrap();
+    assert!(
+        target.starts_with(cs_home.join("profiles/personal2")),
+        "skills should now point into profiles/personal2: {}",
+        target.display()
+    );
+    assert!(cs_home.join("profiles/personal2/skills/foo/SKILL.md").exists());
+}
+
+#[test]
+fn master_unset_restores_claude_home() {
+    let (dir, claude_home, cs_home, fixture) = seeded_master_setup();
+    let _ = dir;
+    let before = dir_snapshot(&claude_home);
+
+    master_env(&claude_home, &cs_home, &fixture)
+        .args(["save", "personal"])
+        .assert()
+        .success();
+    master_env(&claude_home, &cs_home, &fixture)
+        .args(["master", "personal"])
+        .assert()
+        .success();
+    master_env(&claude_home, &cs_home, &fixture)
+        .args(["master", "--unset"])
+        .assert()
+        .success();
+
+    // ~/.claude should be back to the seeded state (no symlinks).
+    assert!(!std::fs::symlink_metadata(claude_home.join("skills"))
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    let after = dir_snapshot(&claude_home);
+    assert_eq!(before, after, "master --unset is not byte-clean");
+
+    let state: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(cs_home.join("state.json")).unwrap()).unwrap();
+    assert!(state["master"].is_null());
 }
 
 #[test]

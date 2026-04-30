@@ -56,16 +56,19 @@ cs                         # live dashboard: 5h block, today's spend, by-profile
 ## Master profile (shared config)
 
 Anything in `~/.claude/{skills,commands,agents,CLAUDE.md}` is duplicated across
-accounts by default. `cs master init` moves those into `~/.claude-cs/master/`
-once and replaces the originals with symlinks — every profile sees the same
-content.
+accounts by default. Designate one of your saved profiles as **master** and the
+four candidates move into that profile's directory; every other profile picks
+them up via the same symlinks.
 
 ```bash
-cs master init             # one-time migration, with rollback manifest
-cs master status           # which paths are symlinked vs. local
-cs override work skills/private-thing
-                           # work profile gets its own copy; personal still uses master
-cs share-skill foo         # promote a profile-local skill back into master
+cs master personal         # designate `personal` as master
+                           # moves ~/.claude/{skills,commands,agents,CLAUDE.md}
+                           # into ~/.claude-cs/profiles/personal/ and symlinks
+                           # them back into ~/.claude/.
+cs master                  # status: which profile is master, per-item state
+cs master work             # change master to `work` (refuses if work already
+                           # has any of the four candidates)
+cs master --unset          # clear the designation; move content back to ~/.claude
 cs uninstall               # rolls back to plain ~/.claude — byte-identical
 ```
 
@@ -95,10 +98,9 @@ cs usage --daily           daily totals
 cs usage --monthly         monthly totals
 cs dashboard               full snapshot (active + block + today)
 
-cs master init|status      manage shared master profile
-cs override <profile> <p>  per-profile override of a master path
-cs unoverride <profile> <p>
-cs share-skill <name>      promote profile-local skill into master
+cs master                  show master designation + per-item symlink state
+cs master <name>           designate <name> as master (or change master)
+cs master --unset          clear master designation; restore ~/.claude
 
 cs link [<profile>]        bind cwd → profile (auto-switch in v0.2)
 cs links                   list all cwd bindings
@@ -120,18 +122,17 @@ Global flags: --json --no-color --dry-run --profile <name> -v / -vv
 ~/.claude/                          # canonical Claude Code home
 ├── settings.json                   # rewritten on switch from per-profile copy
 ├── .active-profile                 # tracking marker for compat
-├── skills/  → ~/.claude-cs/master/skills/   (after `cs master init`)
-├── commands/ → ~/.claude-cs/master/commands/
-├── agents/   → ~/.claude-cs/master/agents/
-└── CLAUDE.md → ~/.claude-cs/master/CLAUDE.md
+├── skills/  → ~/.claude-cs/profiles/<master>/skills/   (after `cs master <name>`)
+├── commands/ → ~/.claude-cs/profiles/<master>/commands/
+├── agents/   → ~/.claude-cs/profiles/<master>/agents/
+└── CLAUDE.md → ~/.claude-cs/profiles/<master>/CLAUDE.md
 
 ~/.claude-cs/                       # cs's home
-├── master/                         # shared content (skills/, commands/, …)
 ├── profiles/<name>/
 │   ├── settings.json               # per-profile (replaces canonical on switch)
 │   ├── env                         # KEY=VAL pairs sourced post-switch
-│   └── overrides/                  # paths that shadow master for this profile
-├── state.json                      # {active, previous, default, switched_at}
+│   └── skills/, commands/, …       # only on the profile designated as master
+├── state.json                      # {active, previous, default, master, switched_at}
 ├── links.json                      # cwd → profile bindings
 ├── session-tags.jsonl              # session_id → profile attribution log
 └── .backups/<ts>/manifest.json     # every destructive op is reversible
@@ -169,7 +170,7 @@ via `CS_TEST_KEYCHAIN=1` and `CS_TEST_KEYCHAIN_FIXTURE=/path/to/fixture.json`.
 - [x] Phase A — skeleton, `cs doctor`, env probes
 - [x] Phase B — `cs list`, `cs status` (text + JSON)
 - [x] Phase C — save/rm/rename/default/switch/`-`/refresh/setup/alias/migrate
-- [x] Phase D — master init/uninstall/override/share-skill (byte-clean roundtrip)
+- [x] Phase D — master profile designation + uninstall (byte-clean roundtrip)
 - [x] Phase E — ccusage data layer, dashboard, `cs link`/`cs links`
 - [ ] Phase F — Ratatui TUI on top of the Phase E data structs
 - [ ] Phase G — cwd auto-switch precmd hook, expiry/quota notifications, `cs audit`, `cs revert`

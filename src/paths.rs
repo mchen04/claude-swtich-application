@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
 
+/// Paths shared across profiles via the master profile's symlinks.
+pub const SHARED_ITEMS: &[&str] = &["skills", "commands", "agents", "CLAUDE.md"];
+
 #[derive(Debug, Clone)]
 pub struct Paths {
     pub home: PathBuf,
@@ -48,10 +51,6 @@ impl Paths {
 
     pub fn profile_dir(&self, name: &str) -> PathBuf {
         self.profiles_dir().join(name)
-    }
-
-    pub fn master_dir(&self) -> PathBuf {
-        self.cs_home.join("master")
     }
 
     pub fn backups_dir(&self) -> PathBuf {
