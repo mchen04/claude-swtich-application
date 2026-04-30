@@ -49,9 +49,7 @@ pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &Optiona
     kc.write(&canonical, &stale)?;
 
     if which("claude").is_none() {
-        if let Some(prev) = prev_canonical {
-            let _ = kc.write(&canonical, &prev);
-        }
+        rollback_canonical(kc, &canonical, prev_canonical.as_deref());
         return Err(Error::Other(
             "`claude` CLI not on PATH; run `claude /login` for this profile manually".into(),
         ));
@@ -61,9 +59,7 @@ pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &Optiona
     match out {
         Ok(o) if o.status.success() => {}
         Ok(o) => {
-            if let Some(prev) = prev_canonical {
-                let _ = kc.write(&canonical, &prev);
-            }
+            rollback_canonical(kc, &canonical, prev_canonical.as_deref());
             return Err(Error::Subprocess {
                 cmd: "claude /status".into(),
                 message: format!(
@@ -74,9 +70,7 @@ pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &Optiona
             });
         }
         Err(e) => {
-            if let Some(prev) = prev_canonical {
-                let _ = kc.write(&canonical, &prev);
-            }
+            rollback_canonical(kc, &canonical, prev_canonical.as_deref());
             return Err(Error::Subprocess {
                 cmd: "claude /status".into(),
                 message: e.to_string(),
@@ -86,21 +80,25 @@ pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &Optiona
 
     let refreshed = kc.read(&canonical)?;
     if refreshed == stale {
-        if let Some(prev) = prev_canonical {
-            let _ = kc.write(&canonical, &prev);
-        }
+        rollback_canonical(kc, &canonical, prev_canonical.as_deref());
         return Err(Error::Other(
             "Claude Code did not refresh the credential; run `claude /login` for this profile manually"
                 .into(),
         ));
     }
     kc.write(&target, &refreshed)?;
-    if let Some(prev) = prev_canonical {
-        let _ = kc.write(&canonical, &prev);
-    }
+    rollback_canonical(kc, &canonical, prev_canonical.as_deref());
 
     eprintln!("refreshed `{}`", name);
     Ok(())
+}
+
+fn rollback_canonical(kc: &dyn Keychain, canonical: &str, prev: Option<&[u8]>) {
+    let Some(prev) = prev else { return };
+    if let Err(e) = kc.write(canonical, prev) {
+        eprintln!("error: could not restore canonical keychain entry {canonical}: {e}");
+        tracing::error!(account = %canonical, error = %e, "canonical keychain restore failed");
+    }
 }
 
 fn which(cmd: &str) -> Option<std::path::PathBuf> {

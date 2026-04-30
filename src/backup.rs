@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
@@ -88,69 +88,22 @@ fn slug_for_now() -> String {
 }
 
 pub fn b64(bytes: &[u8]) -> String {
-    base64_encode(bytes)
-}
-
-#[allow(dead_code)]
-pub fn b64_opt(bytes: Option<&[u8]>) -> Option<String> {
-    bytes.map(base64_encode)
-}
-
-/// Tiny RFC 4648 base64 encoder so we don't pull in the full `base64` crate just for
-/// manifest blobs. Output uses standard alphabet with `=` padding.
-fn base64_encode(input: &[u8]) -> String {
-    const TABLE: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
-    let mut i = 0;
-    while i + 3 <= input.len() {
-        let b0 = input[i] as u32;
-        let b1 = input[i + 1] as u32;
-        let b2 = input[i + 2] as u32;
-        let n = (b0 << 16) | (b1 << 8) | b2;
-        out.push(TABLE[((n >> 18) & 0x3F) as usize] as char);
-        out.push(TABLE[((n >> 12) & 0x3F) as usize] as char);
-        out.push(TABLE[((n >> 6) & 0x3F) as usize] as char);
-        out.push(TABLE[(n & 0x3F) as usize] as char);
-        i += 3;
-    }
-    let remaining = input.len() - i;
-    if remaining == 1 {
-        let b0 = input[i] as u32;
-        let n = b0 << 16;
-        out.push(TABLE[((n >> 18) & 0x3F) as usize] as char);
-        out.push(TABLE[((n >> 12) & 0x3F) as usize] as char);
-        out.push('=');
-        out.push('=');
-    } else if remaining == 2 {
-        let b0 = input[i] as u32;
-        let b1 = input[i + 1] as u32;
-        let n = (b0 << 16) | (b1 << 8);
-        out.push(TABLE[((n >> 18) & 0x3F) as usize] as char);
-        out.push(TABLE[((n >> 12) & 0x3F) as usize] as char);
-        out.push(TABLE[((n >> 6) & 0x3F) as usize] as char);
-        out.push('=');
-    }
-    out
-}
-
-#[allow(dead_code)]
-pub fn read_settings(path: &Path) -> Option<Vec<u8>> {
-    fs::read(path).ok()
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::base64_encode;
+    use super::b64;
 
     #[test]
     fn base64_known_vectors() {
-        assert_eq!(base64_encode(b""), "");
-        assert_eq!(base64_encode(b"f"), "Zg==");
-        assert_eq!(base64_encode(b"fo"), "Zm8=");
-        assert_eq!(base64_encode(b"foo"), "Zm9v");
-        assert_eq!(base64_encode(b"foob"), "Zm9vYg==");
-        assert_eq!(base64_encode(b"fooba"), "Zm9vYmE=");
-        assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
+        assert_eq!(b64(b""), "");
+        assert_eq!(b64(b"f"), "Zg==");
+        assert_eq!(b64(b"fo"), "Zm8=");
+        assert_eq!(b64(b"foo"), "Zm9v");
+        assert_eq!(b64(b"foob"), "Zm9vYg==");
+        assert_eq!(b64(b"fooba"), "Zm9vYmE=");
+        assert_eq!(b64(b"foobar"), "Zm9vYmFy");
     }
 }

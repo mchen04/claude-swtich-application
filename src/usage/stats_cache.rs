@@ -3,6 +3,7 @@ use std::path::Path;
 use serde::Deserialize;
 
 use crate::error::Result;
+use crate::jsonio;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct StatsCache {
@@ -22,10 +23,5 @@ pub struct DailyActivityEntry {
 }
 
 pub fn load(path: &Path) -> Result<StatsCache> {
-    let bytes = match std::fs::read(path) {
-        Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(StatsCache::default()),
-        Err(e) => return Err(crate::error::Error::io_at(path, e)),
-    };
-    Ok(serde_json::from_slice(&bytes).unwrap_or_default())
+    jsonio::load_or_default(path)
 }

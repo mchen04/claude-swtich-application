@@ -56,7 +56,10 @@ pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &NameArg
         before_b64: Some(crate::backup::b64(&existing)),
         after_b64: None,
     });
-    let _ = manifest.write(paths);
+    if let Err(e) = manifest.write(paths) {
+        tracing::warn!(op = "rm", error = %e, "failed to write rollback manifest");
+        eprintln!("warning: failed to write rollback manifest: {e}");
+    }
 
     eprintln!("removed profile `{}`", args.name);
     Ok(())

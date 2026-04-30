@@ -62,7 +62,10 @@ pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &SaveArg
         before_b64: None,
         after_b64: Some(crate::backup::b64(&canonical_blob)),
     });
-    let _ = manifest.write(paths);
+    if let Err(e) = manifest.write(paths) {
+        tracing::warn!(op = "save", error = %e, "failed to write rollback manifest");
+        eprintln!("warning: failed to write rollback manifest: {e}");
+    }
 
     eprintln!("saved profile `{}` ({} bytes)", args.name, canonical_blob.len());
     Ok(())

@@ -100,7 +100,10 @@ pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &RenameA
         }
         manifest.master_profile = Some(args.to.clone());
     }
-    let _ = manifest.write(paths);
+    if let Err(e) = manifest.write(paths) {
+        tracing::warn!(op = "rename", error = %e, "failed to write rollback manifest");
+        eprintln!("warning: failed to write rollback manifest: {e}");
+    }
 
     eprintln!("renamed `{}` -> `{}`", args.from, args.to);
     Ok(())

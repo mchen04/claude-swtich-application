@@ -5,6 +5,7 @@ mod dashboard;
 mod doctor;
 mod dryrun;
 mod error;
+mod jsonio;
 mod keychain;
 mod links;
 mod lock;

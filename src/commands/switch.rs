@@ -83,7 +83,10 @@ pub fn run(
         Ok(b) if b == target_blob => {}
         Ok(_) | Err(_) => {
             if let Some(prev) = &prev_canonical_blob {
-                let _ = kc.write(&canonical, prev);
+                if let Err(e) = kc.write(&canonical, prev) {
+                    eprintln!("error: keychain rollback failed for {canonical}: {e}");
+                    tracing::error!(account = %canonical, error = %e, "keychain rollback failed");
+                }
             }
             return Err(Error::Other(
                 "canonical Keychain write verification failed; rolled back to previous".into(),
@@ -144,7 +147,10 @@ pub fn run(
             after_b64: fs::read(paths.claude_settings()).ok().as_deref().map(crate::backup::b64),
         });
     }
-    let _ = manifest.write(paths);
+    if let Err(e) = manifest.write(paths) {
+        tracing::warn!(op = "switch", error = %e, "failed to write rollback manifest");
+        eprintln!("warning: failed to write rollback manifest: {e}");
+    }
 
     if !global.json {
         eprintln!("switched -> {target_name}");
