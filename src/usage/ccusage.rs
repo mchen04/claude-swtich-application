@@ -33,8 +33,14 @@ impl Default for CcusageClient {
 impl CcusageClient {
     pub fn new() -> Self {
         Self {
-            blocks: Mutex::new(Cache { value: None, fetched_at: None }),
-            daily: Mutex::new(Cache { value: None, fetched_at: None }),
+            blocks: Mutex::new(Cache {
+                value: None,
+                fetched_at: None,
+            }),
+            daily: Mutex::new(Cache {
+                value: None,
+                fetched_at: None,
+            }),
         }
     }
 

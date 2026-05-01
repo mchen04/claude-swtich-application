@@ -28,7 +28,10 @@ pub fn run(_paths: &Paths, global: &GlobalOpts, args: &UsageArgs) -> Result<()> 
         emit_json(&report)?;
     } else {
         emit_text(
-            OutputOpts { json: false, no_color: global.no_color },
+            OutputOpts {
+                json: false,
+                no_color: global.no_color,
+            },
             &TextReport(&report),
         )?;
     }
@@ -53,7 +56,11 @@ fn build(client: &CcusageClient, args: &UsageArgs) -> Result<UsageReport> {
     } else {
         "blocks"
     };
-    Ok(UsageReport { mode, blocks, daily })
+    Ok(UsageReport {
+        mode,
+        blocks,
+        daily,
+    })
 }
 
 fn run_watch(client: &CcusageClient, global: &GlobalOpts, args: &UsageArgs) -> Result<()> {
@@ -95,7 +102,8 @@ impl std::fmt::Display for TextReport<'_> {
                     writeln!(f, "no active 5-hour block (run a `claude` command first)")?;
                 }
                 for b in &self.0.blocks {
-                    let total = b.tokens_in + b.tokens_out + b.cache_creation_tokens + b.cache_read_tokens;
+                    let total =
+                        b.tokens_in + b.tokens_out + b.cache_creation_tokens + b.cache_read_tokens;
                     writeln!(
                         f,
                         "block: {} tokens in/out={}/{} cache r/w={}/{} ${:.2}",
@@ -106,7 +114,8 @@ impl std::fmt::Display for TextReport<'_> {
                         b.cache_creation_tokens,
                         b.cost_usd,
                     )?;
-                    if let (Some(burn), Some(reset)) = (b.burn_rate_per_min, b.resets_at.as_deref()) {
+                    if let (Some(burn), Some(reset)) = (b.burn_rate_per_min, b.resets_at.as_deref())
+                    {
                         writeln!(f, "       burn={:.1}/min  resets={}", burn, reset)?;
                     }
                 }

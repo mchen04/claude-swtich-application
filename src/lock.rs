@@ -21,11 +21,12 @@ impl CsLock {
             .truncate(false)
             .open(&path)
             .map_err(|e| Error::io_at(&path, e))?;
-        file.try_lock_exclusive()
-            .map_err(|_| Error::Refused(format!(
+        file.try_lock_exclusive().map_err(|_| {
+            Error::Refused(format!(
                 "another `cs` write is in progress (lock held: {})",
                 path.display()
-            )))?;
+            ))
+        })?;
         Ok(Self { _file: file })
     }
 }

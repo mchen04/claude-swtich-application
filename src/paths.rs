@@ -12,6 +12,7 @@ pub const SHARED_ITEMS: &[&str] = &["skills", "commands", "agents", "CLAUDE.md"]
 pub struct Paths {
     pub home: PathBuf,
     pub claude_home: PathBuf,
+    pub codex_home: PathBuf,
     pub cs_home: PathBuf,
     pub config_file: PathBuf,
 }
@@ -32,14 +33,18 @@ impl Paths {
         let cs_home = env::var_os("CS_HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| home.join(".claude-cs"));
+        let codex_home = env::var_os("CODEX_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".codex"));
 
-        let config_file = env::var_os("CS_CONFIG").map(PathBuf::from).unwrap_or_else(|| {
-            home.join(".config").join("claude-switch").join("config")
-        });
+        let config_file = env::var_os("CS_CONFIG")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".config").join("claude-switch").join("config"));
 
         Ok(Self {
             home,
             claude_home,
+            codex_home,
             cs_home,
             config_file,
         })
@@ -51,6 +56,14 @@ impl Paths {
 
     pub fn profile_dir(&self, name: &str) -> PathBuf {
         self.profiles_dir().join(name)
+    }
+
+    pub fn profile_provider_dir(&self, name: &str, provider: &str) -> PathBuf {
+        self.profile_dir(name).join("providers").join(provider)
+    }
+
+    pub fn profile_codex_auth(&self, name: &str) -> PathBuf {
+        self.profile_provider_dir(name, "codex").join("auth.json")
     }
 
     pub fn backups_dir(&self) -> PathBuf {
@@ -89,9 +102,12 @@ impl Paths {
         self.claude_home.join("projects")
     }
 
+    pub fn codex_auth(&self) -> PathBuf {
+        self.codex_home.join("auth.json")
+    }
+
     pub fn ensure_cs_home(&self) -> Result<()> {
-        std::fs::create_dir_all(&self.cs_home)
-            .map_err(|e| Error::io_at(&self.cs_home, e))?;
+        std::fs::create_dir_all(&self.cs_home).map_err(|e| Error::io_at(&self.cs_home, e))?;
         Ok(())
     }
 

@@ -14,6 +14,7 @@ mod master;
 mod output;
 mod paths;
 mod profile;
+mod provider;
 mod shell;
 mod state;
 mod symlinks;
@@ -72,6 +73,12 @@ fn dispatch(paths: &Paths, kc: &dyn Keychain, cli: &Cli) -> Result<()> {
         Some(Command::Links) => commands::link::list(paths, &cli.global),
         Some(Command::Uninstall(a)) => commands::uninstall::run(paths, &cli.global, a),
         Some(Command::Tui) => commands::tui::run(),
+        Some(Command::Claude(a)) => {
+            commands::provider::run(paths, kc, &cli.global, crate::provider::Provider::Claude, a)
+        }
+        Some(Command::Codex(a)) => {
+            commands::provider::run(paths, kc, &cli.global, crate::provider::Provider::Codex, a)
+        }
         Some(Command::Switch(a)) => {
             commands::switch::run(paths, kc, &cli.global, &a.name, &a.passthrough)
         }

@@ -25,7 +25,10 @@ fn run_status(paths: &Paths, global: &GlobalOpts) -> Result<()> {
         emit_json(&st)?;
     } else {
         emit_text(
-            OutputOpts { json: false, no_color: global.no_color },
+            OutputOpts {
+                json: false,
+                no_color: global.no_color,
+            },
             &TextStatus(&st),
         )?;
     }
@@ -41,7 +44,10 @@ fn run_set(paths: &Paths, global: &GlobalOpts, name: &str) -> Result<()> {
             emit_json(&report)?;
         } else {
             emit_text(
-                OutputOpts { json: false, no_color: global.no_color },
+                OutputOpts {
+                    json: false,
+                    no_color: global.no_color,
+                },
                 &TextSet(&report),
             )?;
         }
@@ -54,7 +60,10 @@ fn run_set(paths: &Paths, global: &GlobalOpts, name: &str) -> Result<()> {
         emit_json(&report)?;
     } else {
         emit_text(
-            OutputOpts { json: false, no_color: global.no_color },
+            OutputOpts {
+                json: false,
+                no_color: global.no_color,
+            },
             &TextSet(&report),
         )?;
     }
@@ -78,7 +87,10 @@ fn run_unset(paths: &Paths, global: &GlobalOpts) -> Result<()> {
             emit_json(&report)?;
         } else {
             emit_text(
-                OutputOpts { json: false, no_color: global.no_color },
+                OutputOpts {
+                    json: false,
+                    no_color: global.no_color,
+                },
                 &TextUnset(&report),
             )?;
         }
@@ -90,7 +102,10 @@ fn run_unset(paths: &Paths, global: &GlobalOpts) -> Result<()> {
         emit_json(&report)?;
     } else {
         emit_text(
-            OutputOpts { json: false, no_color: global.no_color },
+            OutputOpts {
+                json: false,
+                no_color: global.no_color,
+            },
             &TextUnset(&report),
         )?;
     }

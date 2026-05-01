@@ -52,15 +52,10 @@ impl fmt::Display for Plan {
                 Action::Copy { from, to } => {
                     writeln!(f, "copy    {} -> {}", from.display(), to.display())?
                 }
-                Action::Symlink { target, link } => writeln!(
-                    f,
-                    "symlink {} -> {}",
-                    link.display(),
-                    target.display()
-                )?,
-                Action::RemoveSymlink { link } => {
-                    writeln!(f, "rm-link {}", link.display())?
+                Action::Symlink { target, link } => {
+                    writeln!(f, "symlink {} -> {}", link.display(), target.display())?
                 }
+                Action::RemoveSymlink { link } => writeln!(f, "rm-link {}", link.display())?,
                 Action::WriteFile { path, bytes } => {
                     writeln!(f, "write   {} ({} bytes)", path.display(), bytes)?
                 }

@@ -11,6 +11,18 @@ use crate::jsonio;
 pub struct State {
     pub active: Option<String>,
     pub previous: Option<String>,
+    /// Active profile for Claude provider.
+    #[serde(default)]
+    pub active_claude: Option<String>,
+    /// Previous profile for Claude provider.
+    #[serde(default)]
+    pub previous_claude: Option<String>,
+    /// Active profile for Codex provider.
+    #[serde(default)]
+    pub active_codex: Option<String>,
+    /// Previous profile for Codex provider.
+    #[serde(default)]
+    pub previous_codex: Option<String>,
     pub default: Option<String>,
     /// Profile that owns the shared skills/commands/agents/CLAUDE.md tree.
     #[serde(default)]

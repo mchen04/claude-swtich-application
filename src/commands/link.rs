@@ -50,4 +50,3 @@ pub fn list(paths: &Paths, global: &GlobalOpts) -> Result<()> {
     }
     Ok(())
 }
-

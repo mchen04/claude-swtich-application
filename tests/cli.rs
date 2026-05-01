@@ -27,10 +27,17 @@ fn isolated() -> (TempDir, PathBuf, PathBuf) {
 fn fixture_path(dir: &std::path::Path, blobs: &[(&str, &str)]) -> PathBuf {
     let mut map = serde_json::Map::new();
     for (acct, blob) in blobs {
-        map.insert((*acct).to_string(), serde_json::Value::String((*blob).to_string()));
+        map.insert(
+            (*acct).to_string(),
+            serde_json::Value::String((*blob).to_string()),
+        );
     }
     let p = dir.join("keychain-fixture.json");
-    std::fs::write(&p, serde_json::to_vec(&serde_json::Value::Object(map)).unwrap()).unwrap();
+    std::fs::write(
+        &p,
+        serde_json::to_vec(&serde_json::Value::Object(map)).unwrap(),
+    )
+    .unwrap();
     p
 }
 
@@ -53,10 +60,24 @@ fn fake_oauth(email: &str, expires_in_secs: i64) -> String {
     .to_string()
 }
 
+fn fake_codex_auth(account_id: &str) -> String {
+    serde_json::json!({
+        "auth_mode": "chatgpt",
+        "OPENAI_API_KEY": "sk-test",
+        "tokens": {
+            "access_token": format!("acc-{account_id}"),
+            "refresh_token": format!("ref-{account_id}"),
+            "id_token": format!("id-{account_id}"),
+            "account_id": account_id
+        },
+        "last_refresh": "2026-04-30T00:00:00Z"
+    })
+    .to_string()
+}
+
 #[test]
 fn shows_help() {
-    cs()
-        .arg("--help")
+    cs().arg("--help")
         .assert()
         .success()
         .stdout(predicate::str::contains("Claude Code account switching"))
@@ -71,8 +92,7 @@ fn shows_version() {
 #[test]
 fn doctor_runs_in_isolated_env() {
     let (_dir, claude_home, cs_home) = isolated();
-    cs()
-        .env("CLAUDE_HOME", &claude_home)
+    cs().env("CLAUDE_HOME", &claude_home)
         .env("CS_HOME", &cs_home)
         .arg("doctor")
         .arg("--json")
@@ -85,8 +105,7 @@ fn doctor_runs_in_isolated_env() {
 #[test]
 fn doctor_text_runs_in_isolated_env() {
     let (_dir, claude_home, cs_home) = isolated();
-    cs()
-        .env("CLAUDE_HOME", &claude_home)
+    cs().env("CLAUDE_HOME", &claude_home)
         .env("CS_HOME", &cs_home)
         .arg("doctor")
         .assert()
@@ -103,8 +122,7 @@ fn tui_stub_prints_friendly_message() {
 #[test]
 fn unknown_name_errors_with_not_found() {
     let (_dir, claude_home, cs_home) = isolated();
-    cs()
-        .env("CLAUDE_HOME", &claude_home)
+    cs().env("CLAUDE_HOME", &claude_home)
         .env("CS_HOME", &cs_home)
         .arg("does-not-exist-yet")
         .assert()
@@ -115,8 +133,7 @@ fn unknown_name_errors_with_not_found() {
 #[test]
 fn list_empty_text() {
     let (_dir, claude_home, cs_home) = isolated();
-    cs()
-        .env("CLAUDE_HOME", &claude_home)
+    cs().env("CLAUDE_HOME", &claude_home)
         .env("CS_HOME", &cs_home)
         .arg("list")
         .assert()
@@ -146,8 +163,7 @@ fn list_empty_json_schema() {
 #[test]
 fn status_no_active_text() {
     let (_dir, claude_home, cs_home) = isolated();
-    cs()
-        .env("CLAUDE_HOME", &claude_home)
+    cs().env("CLAUDE_HOME", &claude_home)
         .env("CS_HOME", &cs_home)
         .arg("status")
         .assert()
@@ -157,9 +173,27 @@ fn status_no_active_text() {
 
 // --- Phase C: switch + profile management round-trip --------------------------
 
-fn phase_c_env(claude_home: &std::path::Path, cs_home: &std::path::Path, fixture: &std::path::Path) -> Command {
+fn phase_c_env(
+    claude_home: &std::path::Path,
+    cs_home: &std::path::Path,
+    fixture: &std::path::Path,
+) -> Command {
     let mut c = cs();
     c.env("CLAUDE_HOME", claude_home)
+        .env("CS_HOME", cs_home)
+        .env("CS_TEST_KEYCHAIN_FIXTURE", fixture);
+    c
+}
+
+fn phase_c_env_with_codex(
+    claude_home: &std::path::Path,
+    codex_home: &std::path::Path,
+    cs_home: &std::path::Path,
+    fixture: &std::path::Path,
+) -> Command {
+    let mut c = cs();
+    c.env("CLAUDE_HOME", claude_home)
+        .env("CODEX_HOME", codex_home)
         .env("CS_HOME", cs_home)
         .env("CS_TEST_KEYCHAIN_FIXTURE", fixture);
     c
@@ -228,7 +262,9 @@ fn switch_changes_canonical_and_state() {
         serde_json::from_slice(&std::fs::read(&fixture).unwrap()).unwrap();
     assert_eq!(
         canonical_now["test-user"].as_str().unwrap(),
-        canonical_now["Claude Code-credentials-personal"].as_str().unwrap()
+        canonical_now["Claude Code-credentials-personal"]
+            .as_str()
+            .unwrap()
     );
 }
 
@@ -323,10 +359,7 @@ fn default_then_default_go() {
     let blob = fake_oauth("a@example.com", 3600);
     let fixture = fixture_path(
         dir.path(),
-        &[
-            ("test-user", &blob),
-            ("Claude Code-credentials-a", &blob),
-        ],
+        &[("test-user", &blob), ("Claude Code-credentials-a", &blob)],
     );
 
     phase_c_env(&claude_home, &cs_home, &fixture)
@@ -362,11 +395,18 @@ fn dir_snapshot(root: &std::path::Path) -> std::collections::BTreeMap<String, Ve
         for entry in std::fs::read_dir(base).unwrap() {
             let entry = entry.unwrap();
             let path = entry.path();
-            let rel = path.strip_prefix(root).unwrap().to_string_lossy().into_owned();
+            let rel = path
+                .strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
             let meta = std::fs::symlink_metadata(&path).unwrap();
             if meta.file_type().is_symlink() {
                 let target = std::fs::read_link(&path).unwrap();
-                out.insert(format!("L:{rel}"), target.to_string_lossy().into_owned().into_bytes());
+                out.insert(
+                    format!("L:{rel}"),
+                    target.to_string_lossy().into_owned().into_bytes(),
+                );
             } else if meta.file_type().is_dir() {
                 out.insert(format!("D:{rel}"), Vec::new());
                 walk(root, &path, out);
@@ -379,7 +419,11 @@ fn dir_snapshot(root: &std::path::Path) -> std::collections::BTreeMap<String, Ve
     map
 }
 
-fn master_env(claude_home: &std::path::Path, cs_home: &std::path::Path, fixture: &std::path::Path) -> Command {
+fn master_env(
+    claude_home: &std::path::Path,
+    cs_home: &std::path::Path,
+    fixture: &std::path::Path,
+) -> Command {
     let mut c = cs();
     c.env("CLAUDE_HOME", claude_home)
         .env("CS_HOME", cs_home)
@@ -604,7 +648,9 @@ fn rename_master_profile_updates_state_and_symlinks() {
         "skills should now point into profiles/personal2: {}",
         target.display()
     );
-    assert!(cs_home.join("profiles/personal2/skills/foo/SKILL.md").exists());
+    assert!(cs_home
+        .join("profiles/personal2/skills/foo/SKILL.md")
+        .exists());
 }
 
 #[test]
@@ -671,4 +717,92 @@ fn status_no_active_json_shape() {
     for k in ["active", "default", "previous", "asked_about"] {
         assert!(v.get(k).is_some(), "missing {k}");
     }
+}
+
+#[test]
+fn codex_save_and_switch_round_trip() {
+    let (dir, claude_home, cs_home) = isolated();
+    let codex_home = dir.path().join("codex");
+    std::fs::create_dir_all(&codex_home).unwrap();
+    let fixture = fixture_path(dir.path(), &[]);
+
+    std::fs::write(
+        codex_home.join("auth.json"),
+        fake_codex_auth("personal-acct"),
+    )
+    .unwrap();
+    phase_c_env_with_codex(&claude_home, &codex_home, &cs_home, &fixture)
+        .args(["codex", "save", "personal"])
+        .assert()
+        .success();
+
+    std::fs::write(codex_home.join("auth.json"), fake_codex_auth("work-acct")).unwrap();
+    phase_c_env_with_codex(&claude_home, &codex_home, &cs_home, &fixture)
+        .args(["codex", "save", "work"])
+        .assert()
+        .success();
+
+    phase_c_env_with_codex(&claude_home, &codex_home, &cs_home, &fixture)
+        .args(["codex", "switch", "personal"])
+        .assert()
+        .success();
+
+    let active: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(codex_home.join("auth.json")).unwrap()).unwrap();
+    assert_eq!(active["tokens"]["account_id"], "personal-acct");
+}
+
+#[test]
+fn unified_switch_updates_claude_and_codex_when_both_present() {
+    let (dir, claude_home, cs_home) = isolated();
+    let codex_home = dir.path().join("codex");
+    std::fs::create_dir_all(&codex_home).unwrap();
+    let work_blob = fake_oauth("work@example.com", 3600);
+    let personal_blob = fake_oauth("personal@example.com", 3600);
+    let fixture = fixture_path(
+        dir.path(),
+        &[
+            ("test-user", &work_blob),
+            ("Claude Code-credentials-personal", &personal_blob),
+            ("Claude Code-credentials-work", &work_blob),
+        ],
+    );
+
+    std::fs::write(codex_home.join("auth.json"), fake_codex_auth("work-acct")).unwrap();
+    phase_c_env_with_codex(&claude_home, &codex_home, &cs_home, &fixture)
+        .args(["codex", "save", "work"])
+        .assert()
+        .success();
+    std::fs::write(
+        codex_home.join("auth.json"),
+        fake_codex_auth("personal-acct"),
+    )
+    .unwrap();
+    phase_c_env_with_codex(&claude_home, &codex_home, &cs_home, &fixture)
+        .args(["codex", "save", "personal"])
+        .assert()
+        .success();
+
+    phase_c_env_with_codex(&claude_home, &codex_home, &cs_home, &fixture)
+        .args(["personal"])
+        .assert()
+        .success();
+
+    let state: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(cs_home.join("state.json")).unwrap()).unwrap();
+    assert_eq!(state["active"], "personal");
+    assert_eq!(state["active_claude"], "personal");
+    assert_eq!(state["active_codex"], "personal");
+
+    let canonical_now: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&fixture).unwrap()).unwrap();
+    assert_eq!(
+        canonical_now["test-user"].as_str().unwrap(),
+        canonical_now["Claude Code-credentials-personal"]
+            .as_str()
+            .unwrap()
+    );
+    let active_codex: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(codex_home.join("auth.json")).unwrap()).unwrap();
+    assert_eq!(active_codex["tokens"]["account_id"], "personal-acct");
 }

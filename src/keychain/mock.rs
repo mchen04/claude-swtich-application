@@ -67,7 +67,9 @@ impl SharedMockKeychain {
     fn load(&self) -> BTreeMap<String, Vec<u8>> {
         if let Some(path) = Self::fixture_path() {
             if let Ok(bytes) = fs::read(&path) {
-                if let Ok(serde_json::Value::Object(map)) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                if let Ok(serde_json::Value::Object(map)) =
+                    serde_json::from_slice::<serde_json::Value>(&bytes)
+                {
                     return map
                         .into_iter()
                         .filter_map(|(k, v)| match v {

@@ -83,7 +83,9 @@ fn slug_for_now() -> String {
         .duration_since(SystemTime::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or_default();
-    let dt = chrono::DateTime::<chrono::Utc>::from(SystemTime::UNIX_EPOCH + std::time::Duration::from_millis(ts as u64));
+    let dt = chrono::DateTime::<chrono::Utc>::from(
+        SystemTime::UNIX_EPOCH + std::time::Duration::from_millis(ts as u64),
+    );
     dt.format("%Y-%m-%dT%H-%M-%S%.3fZ").to_string()
 }
 

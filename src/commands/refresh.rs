@@ -14,7 +14,12 @@ use crate::state::State;
 /// stale profile blob into the canonical Keychain entry, run a no-op `claude` invocation
 /// (which triggers Claude Code's own refresh), then copy the freshly-refreshed canonical
 /// blob back into the profile entry.
-pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &OptionalNameArg) -> Result<()> {
+pub fn run(
+    paths: &Paths,
+    kc: &dyn Keychain,
+    global: &GlobalOpts,
+    args: &OptionalNameArg,
+) -> Result<()> {
     let state = State::load(&paths.state_file()).unwrap_or_default();
     let name = args
         .name

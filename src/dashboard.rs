@@ -10,9 +10,8 @@ use crate::paths::Paths;
 use crate::profile::{human_expiry, ProfileSummary};
 use crate::state::State;
 use crate::usage::{
-    ccusage::CcusageClient,
-    session_tags,
-    stats_cache, ActiveBlock, DailyByProfile, DailyTotal, SessionLive,
+    ccusage::CcusageClient, session_tags, stats_cache, ActiveBlock, DailyByProfile, DailyTotal,
+    SessionLive,
 };
 
 #[derive(Debug, Serialize)]
@@ -27,7 +26,11 @@ pub struct DashboardSnapshot {
     pub warnings: Vec<String>,
 }
 
-pub fn snapshot(paths: &Paths, kc: &dyn Keychain, ccusage: Option<&CcusageClient>) -> Result<DashboardSnapshot> {
+pub fn snapshot(
+    paths: &Paths,
+    kc: &dyn Keychain,
+    ccusage: Option<&CcusageClient>,
+) -> Result<DashboardSnapshot> {
     let state = State::load(&paths.state_file()).unwrap_or_default();
     let list_report = list::build(paths, kc)?;
     let active = list_report.profiles.iter().find(|p| p.is_active).cloned();
@@ -135,8 +138,15 @@ impl fmt::Display for DashboardSnapshot {
             Some(p) => {
                 let email = p.email.as_deref().unwrap_or("—");
                 let plan = p.plan.as_deref().unwrap_or("—");
-                let exp = p.expires_in_secs.map(human_expiry).unwrap_or_else(|| "—".into());
-                writeln!(f, "active : {} <{}>  plan={}  token {}", p.name, email, plan, exp)?;
+                let exp = p
+                    .expires_in_secs
+                    .map(human_expiry)
+                    .unwrap_or_else(|| "—".into());
+                writeln!(
+                    f,
+                    "active : {} <{}>  plan={}  token {}",
+                    p.name, email, plan, exp
+                )?;
             }
         }
 
@@ -155,7 +165,8 @@ impl fmt::Display for DashboardSnapshot {
                 block.cache_creation_tokens,
                 block.cost_usd
             )?;
-            if let (Some(burn), Some(reset)) = (block.burn_rate_per_min, block.resets_at.as_deref()) {
+            if let (Some(burn), Some(reset)) = (block.burn_rate_per_min, block.resets_at.as_deref())
+            {
                 writeln!(f, "         burn ~{:.1}/min  resets {}", burn, reset)?;
             }
         }

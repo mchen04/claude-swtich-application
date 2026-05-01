@@ -7,7 +7,7 @@ use crate::state::State;
 
 pub fn set(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &NameArg) -> Result<()> {
     let target = keychain::profile_account(&args.name);
-    if kc.read(&target).is_err() {
+    if kc.read(&target).is_err() && !paths.profile_codex_auth(&args.name).exists() {
         return Err(Error::ProfileNotFound(args.name.clone()));
     }
     if global.dry_run {
@@ -25,9 +25,8 @@ pub fn set(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &NameArg
 
 pub fn go(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts) -> Result<()> {
     let state = State::load(&paths.state_file()).unwrap_or_default();
-    let name = state
-        .default
-        .clone()
-        .ok_or_else(|| Error::Other("no default profile set (run `cs default <name>` first)".into()))?;
+    let name = state.default.clone().ok_or_else(|| {
+        Error::Other("no default profile set (run `cs default <name>` first)".into())
+    })?;
     super::switch::run(paths, kc, global, &name, &[])
 }

@@ -6,8 +6,16 @@ use crate::error::{Error, Result};
 use crate::keychain::Keychain;
 use crate::paths::Paths;
 
-pub fn run(paths: &Paths, _kc: &dyn Keychain, global: &GlobalOpts, args: &MigrateArgs) -> Result<()> {
-    let cfg_path = args.from.clone().unwrap_or_else(|| paths.config_file.clone());
+pub fn run(
+    paths: &Paths,
+    _kc: &dyn Keychain,
+    global: &GlobalOpts,
+    args: &MigrateArgs,
+) -> Result<()> {
+    let cfg_path = args
+        .from
+        .clone()
+        .unwrap_or_else(|| paths.config_file.clone());
     let bytes = fs::read(&cfg_path).map_err(|e| Error::io_at(&cfg_path, e))?;
     let text = String::from_utf8_lossy(&bytes);
 
@@ -20,7 +28,11 @@ pub fn run(paths: &Paths, _kc: &dyn Keychain, global: &GlobalOpts, args: &Migrat
         eprintln!("would inspect {} ({} bytes)", path.display(), bytes.len());
         return Ok(());
     }
-    eprintln!("legacy config at {} ({} bytes)", path.display(), bytes.len());
+    eprintln!(
+        "legacy config at {} ({} bytes)",
+        path.display(),
+        bytes.len()
+    );
     eprintln!(
         "cs cannot reuse legacy keychain entries because acct names differ; for each \
          profile listed below, run `claude /login`, then `cs save <name>`."

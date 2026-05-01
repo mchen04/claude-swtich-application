@@ -62,6 +62,8 @@ impl OauthCreds {
 #[derive(Debug, Clone, Serialize)]
 pub struct ProfileSummary {
     pub name: String,
+    #[serde(default)]
+    pub providers: Vec<String>,
     pub email: Option<String>,
     pub plan: Option<String>,
     /// ISO-8601 string for human readability in JSON output.
@@ -82,6 +84,7 @@ impl ProfileSummary {
             .unwrap_or_else(|e| -(e.duration().as_secs() as i64));
         Self {
             name: name.to_string(),
+            providers: vec!["claude".to_string()],
             email: creds.email().map(|s| s.to_string()),
             plan: creds.plan().map(|s| s.to_string()),
             expires_at: Some(expires_at),
@@ -95,6 +98,7 @@ impl ProfileSummary {
     pub fn unknown(name: &str) -> Self {
         Self {
             name: name.to_string(),
+            providers: vec![],
             email: None,
             plan: None,
             expires_at: None,

@@ -54,10 +54,18 @@ pub fn status(paths: &Paths, state: &State) -> Result<MasterStatus> {
             state: item_state,
         });
     }
-    Ok(MasterStatus { master, master_dir, items })
+    Ok(MasterStatus {
+        master,
+        master_dir,
+        items,
+    })
 }
 
-fn classify(claude_path: &Path, master_dir: Option<&Path>, master_path: Option<&Path>) -> ItemState {
+fn classify(
+    claude_path: &Path,
+    master_dir: Option<&Path>,
+    master_path: Option<&Path>,
+) -> ItemState {
     let meta = match fs::symlink_metadata(claude_path) {
         Ok(m) => m,
         Err(_) => return ItemState::Missing,
@@ -240,7 +248,10 @@ fn set_change_master(
             continue;
         }
         move_path(&from, &to)?;
-        manifest.push(BackupAction::FsMove { from: from.clone(), to: to.clone() });
+        manifest.push(BackupAction::FsMove {
+            from: from.clone(),
+            to: to.clone(),
+        });
         // Retarget the ~/.claude/* symlink to the new location.
         symlinks::replace(&to, &claude_path)?;
         manifest.push(BackupAction::SymlinkCreate {
@@ -366,8 +377,10 @@ pub fn uninstall(paths: &Paths, keep_master: bool, dry_run: bool) -> Result<Unin
         // Nothing designated; only stray symlinks (if any) need cleanup.
         let status = status(paths, &state)?;
         for item in status.items {
-            if matches!(item.state, ItemState::SymlinkBroken | ItemState::SymlinkForeign)
-                && !dry_run
+            if matches!(
+                item.state,
+                ItemState::SymlinkBroken | ItemState::SymlinkForeign
+            ) && !dry_run
             {
                 let _ = symlinks::remove(&item.claude_path);
             }
@@ -400,7 +413,9 @@ pub fn uninstall(paths: &Paths, keep_master: bool, dry_run: bool) -> Result<Unin
 }
 
 fn is_empty_dir(p: &Path) -> bool {
-    fs::read_dir(p).map(|mut i| i.next().is_none()).unwrap_or(false)
+    fs::read_dir(p)
+        .map(|mut i| i.next().is_none())
+        .unwrap_or(false)
 }
 
 fn move_path(from: &Path, to: &Path) -> Result<()> {
@@ -409,8 +424,9 @@ fn move_path(from: &Path, to: &Path) -> Result<()> {
     }
     match fs::rename(from, to) {
         Ok(_) => Ok(()),
-        Err(e) if e.raw_os_error() == Some(libc_exdev()) => copy_recursive(from, to)
-            .and_then(|_| remove_recursive(from)),
+        Err(e) if e.raw_os_error() == Some(libc_exdev()) => {
+            copy_recursive(from, to).and_then(|_| remove_recursive(from))
+        }
         Err(e) => Err(Error::io_at(to, e)),
     }
 }

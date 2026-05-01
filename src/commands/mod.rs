@@ -6,6 +6,7 @@ pub mod link;
 pub mod list;
 pub mod master;
 pub mod migrate;
+pub mod provider;
 pub mod refresh;
 pub mod rename;
 pub mod rm;

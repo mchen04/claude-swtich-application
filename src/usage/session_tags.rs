@@ -50,5 +50,7 @@ pub fn append(path: &Path, tag: &SessionTag) -> Result<()> {
 
 #[allow(dead_code)] // attribution helper for the jsonl tailer
 pub fn lookup(tags: &[SessionTag]) -> HashMap<String, String> {
-    tags.iter().map(|t| (t.session_id.clone(), t.profile.clone())).collect()
+    tags.iter()
+        .map(|t| (t.session_id.clone(), t.profile.clone()))
+        .collect()
 }

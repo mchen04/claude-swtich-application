@@ -8,7 +8,7 @@ use clap::{ArgAction, Args, Parser, Subcommand};
     long_about = "Sub-second Claude Code account switching with master-profile sharing of \
                   skills/commands/agents/CLAUDE.md and a live usage dashboard.",
     propagate_version = true,
-    disable_help_subcommand = true,
+    disable_help_subcommand = true
 )]
 pub struct Cli {
     #[command(flatten)]
@@ -81,6 +81,10 @@ pub enum Command {
     Uninstall(UninstallArgs),
     /// Launch the Ratatui usage TUI.
     Tui,
+    /// Claude-specific profile operations.
+    Claude(ProviderArgs),
+    /// Codex-specific profile operations.
+    Codex(ProviderArgs),
 
     /// Hidden: invoked by main.rs after rewriting `cs <name> [-- args...]`.
     #[command(name = "__switch", hide = true)]
@@ -91,6 +95,26 @@ pub enum Command {
     /// Hidden helper used by the shell wrapper.
     #[command(name = "__wrapper-emit-env", hide = true)]
     WrapperEmitEnv(NameArg),
+}
+
+#[derive(Debug, Args)]
+pub struct ProviderArgs {
+    #[command(subcommand)]
+    pub command: ProviderCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ProviderCommand {
+    /// List saved profiles for this provider.
+    List,
+    /// Show active profile (or named profile) details for this provider.
+    Status(StatusArgs),
+    /// Snapshot current credentials into a named profile for this provider.
+    Save(SaveArgs),
+    /// Switch this provider to a profile.
+    Switch(NameArg),
+    /// Refresh credentials for this provider.
+    Refresh(OptionalNameArg),
 }
 
 #[derive(Debug, Args)]
@@ -234,6 +258,8 @@ pub const KNOWN_SUBCOMMANDS: &[&str] = &[
     "links",
     "uninstall",
     "tui",
+    "claude",
+    "codex",
     "help",
     "__switch",
     "__switch-previous",

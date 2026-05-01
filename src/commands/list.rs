@@ -1,4 +1,6 @@
+use std::collections::BTreeSet;
 use std::fmt;
+use std::fs;
 
 use serde::Serialize;
 
@@ -34,18 +36,45 @@ pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts) -> Result<()> 
 pub fn build(paths: &Paths, kc: &dyn Keychain) -> Result<ListReport> {
     let state = State::load(&paths.state_file()).unwrap_or_default();
     let accounts = kc.list().unwrap_or_default();
+    let mut names = BTreeSet::new();
+    for account in &accounts {
+        if let Some(name) = keychain::parse_profile_name(account) {
+            names.insert(name.to_string());
+        }
+    }
+    let root = paths.profiles_dir();
+    if root.exists() {
+        if let Ok(entries) = fs::read_dir(&root) {
+            for entry in entries.flatten() {
+                if let Ok(ft) = entry.file_type() {
+                    if !ft.is_dir() {
+                        continue;
+                    }
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if paths.profile_codex_auth(&name).exists() {
+                        names.insert(name);
+                    }
+                }
+            }
+        }
+    }
     let mut profiles = Vec::new();
-    for account in accounts {
-        let Some(name) = keychain::parse_profile_name(&account) else {
-            continue;
-        };
-        let summary = match kc.read(&account) {
+    for name in names {
+        let account = keychain::profile_account(&name);
+        let mut summary = match kc.read(&account) {
             Ok(bytes) => match OauthCreds::parse(&bytes) {
-                Ok(creds) => ProfileSummary::from_creds(name, &creds),
-                Err(_) => ProfileSummary::unknown(name),
+                Ok(creds) => ProfileSummary::from_creds(&name, &creds),
+                Err(_) => ProfileSummary::unknown(&name),
             },
-            Err(_) => ProfileSummary::unknown(name),
+            Err(_) => ProfileSummary::unknown(&name),
         };
+        summary.providers.clear();
+        if kc.read(&account).is_ok() {
+            summary.providers.push("claude".to_string());
+        }
+        if paths.profile_codex_auth(&name).exists() {
+            summary.providers.push("codex".to_string());
+        }
         profiles.push(summary);
     }
     profiles.sort_by(|a, b| a.name.cmp(&b.name));
@@ -70,7 +99,10 @@ impl fmt::Display for ListReport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.profiles.is_empty() {
             writeln!(f, "(no profiles saved)")?;
-            writeln!(f, "Save the active Claude Code account with `cs save <name>`.")?;
+            writeln!(
+                f,
+                "Save the active Claude Code account with `cs save <name>`."
+            )?;
             return Ok(());
         }
         writeln!(
@@ -91,10 +123,20 @@ impl fmt::Display for ListReport {
                 Some(secs) => human_expiry(secs),
                 None => "—".into(),
             };
+            let providers = if p.providers.is_empty() {
+                "—".to_string()
+            } else {
+                p.providers.join("+")
+            };
             writeln!(
                 f,
-                "{:<3}{:<18}{:<32}{:<10}{:<24}",
-                mark, p.name, email, plan, expires
+                "{:<3}{:<18}{:<32}{:<10}{:<24}{}",
+                mark,
+                p.name,
+                email,
+                plan,
+                expires,
+                format!(" providers={providers}")
             )?;
         }
         if self.active.is_none() {

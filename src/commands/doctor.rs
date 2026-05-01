@@ -5,7 +5,12 @@ use crate::keychain::Keychain;
 use crate::output::{emit_json, OutputOpts};
 use crate::paths::Paths;
 
-pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, _args: &DoctorArgs) -> Result<()> {
+pub fn run(
+    paths: &Paths,
+    kc: &dyn Keychain,
+    global: &GlobalOpts,
+    _args: &DoctorArgs,
+) -> Result<()> {
     let report = doctor::run(paths, kc)?;
     if global.json {
         emit_json(&report)?;

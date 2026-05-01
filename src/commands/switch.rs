@@ -13,6 +13,7 @@ use crate::lock::CsLock;
 use crate::output::OutputOpts;
 use crate::paths::Paths;
 use crate::profile::OauthCreds;
+use crate::provider;
 use crate::state::State;
 
 pub fn run(
@@ -22,21 +23,35 @@ pub fn run(
     target_name: &str,
     passthrough: &[String],
 ) -> Result<()> {
-    let target_account = keychain::profile_account(target_name);
-    let target_blob = kc
-        .read(&target_account)
-        .map_err(|_| Error::ProfileNotFound(target_name.to_string()))?;
-    let target_creds = OauthCreds::parse(&target_blob)?;
-
-    let canonical = keychain::canonical_account();
-    let prev_canonical_blob = kc.read(&canonical).ok();
+    let claude_target = read_target_claude(kc, target_name);
+    let codex_target = provider::read_codex_profile_blob(paths, target_name).ok();
+    let has_any = claude_target.is_ok() || codex_target.is_some();
+    if !has_any {
+        return Err(Error::ProfileNotFound(target_name.to_string()));
+    }
 
     if global.dry_run {
         let mut plan = Plan::new();
-        plan.push(Action::KeychainWrite {
-            account: canonical.clone(),
-            bytes: target_blob.len(),
-        });
+        if let Ok(blob) = claude_target.as_ref() {
+            plan.push(Action::KeychainWrite {
+                account: keychain::canonical_account(),
+                bytes: blob.len(),
+            });
+            if let Some(profile_settings) = profile_settings_path(paths, target_name) {
+                if profile_settings.exists() {
+                    plan.push(Action::Copy {
+                        from: profile_settings,
+                        to: paths.claude_settings(),
+                    });
+                }
+            }
+        }
+        if let Some(blob) = codex_target.as_ref() {
+            plan.push(Action::WriteFile {
+                path: paths.codex_auth(),
+                bytes: blob.len(),
+            });
+        }
         plan.push(Action::WriteFile {
             path: paths.state_file(),
             bytes: 0,
@@ -45,14 +60,6 @@ pub fn run(
             path: paths.active_profile_marker(),
             bytes: target_name.len(),
         });
-        if let Some(profile_settings) = profile_settings_path(paths, target_name) {
-            if profile_settings.exists() {
-                plan.push(Action::Copy {
-                    from: profile_settings,
-                    to: paths.claude_settings(),
-                });
-            }
-        }
         if !passthrough.is_empty() {
             plan.push(Action::SpawnProcess {
                 cmd: "claude".into(),
@@ -70,58 +77,100 @@ pub fn run(
     let _lock = CsLock::acquire(paths)?;
     paths.ensure_cs_home()?;
 
-    if target_creds.is_expired(std::time::Duration::from_secs(60)) {
-        eprintln!(
-            "warning: target profile `{}` token is near expiry; consider `cs refresh {}` first",
-            target_name, target_name
-        );
-    }
-
-    // Atomic-ish keychain swap with verify + rollback.
-    kc.write(&canonical, &target_blob)?;
-    match kc.read(&canonical) {
-        Ok(b) if b == target_blob => {}
-        Ok(_) | Err(_) => {
-            if let Some(prev) = &prev_canonical_blob {
-                if let Err(e) = kc.write(&canonical, prev) {
-                    eprintln!("error: keychain rollback failed for {canonical}: {e}");
-                    tracing::error!(account = %canonical, error = %e, "keychain rollback failed");
-                }
-            }
-            return Err(Error::Other(
-                "canonical Keychain write verification failed; rolled back to previous".into(),
-            ));
-        }
-    }
-
-    // Per-profile settings.json (if present).
-    let mut prev_settings: Option<Vec<u8>> = None;
-    if let Some(profile_settings) = profile_settings_path(paths, target_name) {
-        if profile_settings.exists() {
-            let dst = paths.claude_settings();
-            prev_settings = fs::read(&dst).ok();
-            atomic_replace(&profile_settings, &dst)?;
-        }
-    }
-
-    // State update.
+    let canonical = keychain::canonical_account();
+    let prev_canonical_blob = kc.read(&canonical).ok();
+    let prev_codex_blob = provider::read_codex_active_blob(paths).ok();
+    let prev_settings = fs::read(paths.claude_settings()).ok();
     let state_path = paths.state_file();
     let mut state = State::load(&state_path).unwrap_or_default();
     let prev_state_value = serde_json::to_value(&state).ok();
+    let prior_active = state.active.clone();
+
+    let mut switched_claude = false;
+    if let Ok(target_blob) = claude_target {
+        switched_claude = true;
+        let target_creds = OauthCreds::parse(&target_blob)?;
+        if target_creds.is_expired(std::time::Duration::from_secs(60)) {
+            eprintln!(
+                "warning: target Claude profile `{}` token is near expiry; consider `cs refresh {}` first",
+                target_name, target_name
+            );
+        }
+        // Atomic-ish keychain swap with verify + rollback.
+        kc.write(&canonical, &target_blob)?;
+        match kc.read(&canonical) {
+            Ok(b) if b == target_blob => {}
+            Ok(_) | Err(_) => {
+                rollback_claude(kc, &canonical, prev_canonical_blob.as_deref());
+                return Err(Error::Other(
+                    "canonical Keychain write verification failed; rolled back to previous".into(),
+                ));
+            }
+        }
+        if let Some(profile_settings) = profile_settings_path(paths, target_name) {
+            if profile_settings.exists() {
+                if let Err(e) = atomic_replace(&profile_settings, &paths.claude_settings()) {
+                    rollback_claude(kc, &canonical, prev_canonical_blob.as_deref());
+                    if let Some(prev) = prev_settings.as_deref() {
+                        let _ = write_bytes_atomic(&paths.claude_settings(), prev);
+                    }
+                    return Err(e);
+                }
+            }
+        }
+    }
+
+    let mut switched_codex = false;
+    if let Some(target_blob) = codex_target {
+        switched_codex = true;
+        if let Err(e) = provider::write_codex_active_blob(paths, &target_blob) {
+            rollback_claude(kc, &canonical, prev_canonical_blob.as_deref());
+            if let Some(prev) = prev_settings.as_deref() {
+                let _ = write_bytes_atomic(&paths.claude_settings(), prev);
+            }
+            return Err(e);
+        }
+        match provider::read_codex_active_blob(paths) {
+            Ok(b) if b == target_blob => {}
+            Ok(_) | Err(_) => {
+                rollback_claude(kc, &canonical, prev_canonical_blob.as_deref());
+                if let Some(prev) = prev_settings.as_deref() {
+                    let _ = write_bytes_atomic(&paths.claude_settings(), prev);
+                }
+                if let Some(prev) = prev_codex_blob.as_deref() {
+                    let _ = provider::write_codex_active_blob(paths, prev);
+                }
+                return Err(Error::Other(
+                    "codex auth write verification failed; rolled back to previous".into(),
+                ));
+            }
+        }
+    }
+
     let now_ms = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
-    let prior_active = state.active.clone();
     if prior_active.as_deref() != Some(target_name) {
         state.previous = prior_active;
     }
     state.active = Some(target_name.to_string());
     state.switched_at_ms = Some(now_ms);
     state.since_ms = Some(now_ms);
+    if switched_claude {
+        if state.active_claude.as_deref() != Some(target_name) {
+            state.previous_claude = state.active_claude.clone();
+        }
+        state.active_claude = Some(target_name.to_string());
+    }
+    if switched_codex {
+        if state.active_codex.as_deref() != Some(target_name) {
+            state.previous_codex = state.active_codex.clone();
+        }
+        state.active_codex = Some(target_name.to_string());
+    }
     state.save(&state_path)?;
 
-    // .active-profile marker for compat with the legacy claude-switch tool.
     let marker = paths.active_profile_marker();
     if let Some(parent) = marker.parent() {
         let _ = fs::create_dir_all(parent);
@@ -130,33 +179,48 @@ pub fn run(
         tracing::warn!(?marker, error=%e, "could not write .active-profile marker");
     }
 
-    // Manifest.
     let mut manifest = Manifest::new("switch");
-    manifest.push(BackupAction::KeychainReplace {
-        account: canonical,
-        before_b64: prev_canonical_blob.as_deref().map(crate::backup::b64),
-        after_b64: Some(crate::backup::b64(&target_blob)),
-    });
+    if switched_claude {
+        let target_blob = kc.read(&canonical).ok();
+        manifest.push(BackupAction::KeychainReplace {
+            account: canonical.clone(),
+            before_b64: prev_canonical_blob.as_deref().map(crate::backup::b64),
+            after_b64: target_blob.as_deref().map(crate::backup::b64),
+        });
+        if let Some(prev) = &prev_settings {
+            manifest.push(BackupAction::SettingsReplace {
+                before_b64: Some(crate::backup::b64(prev)),
+                after_b64: fs::read(paths.claude_settings())
+                    .ok()
+                    .as_deref()
+                    .map(crate::backup::b64),
+            });
+        }
+    }
+    if switched_codex {
+        manifest.push(BackupAction::Note {
+            message: format!("codex auth switched via {}", paths.codex_auth().display()),
+        });
+    }
     manifest.push(BackupAction::StateReplace {
         before: prev_state_value,
         after: serde_json::to_value(&state).ok(),
     });
-    if let Some(prev) = &prev_settings {
-        manifest.push(BackupAction::SettingsReplace {
-            before_b64: Some(crate::backup::b64(prev)),
-            after_b64: fs::read(paths.claude_settings()).ok().as_deref().map(crate::backup::b64),
-        });
-    }
     if let Err(e) = manifest.write(paths) {
         tracing::warn!(op = "switch", error = %e, "failed to write rollback manifest");
         eprintln!("warning: failed to write rollback manifest: {e}");
     }
 
     if !global.json {
-        eprintln!("switched -> {target_name}");
+        match (switched_claude, switched_codex) {
+            (true, true) => eprintln!("switched -> {target_name} (claude + codex)"),
+            (true, false) => eprintln!("switched -> {target_name} (claude)"),
+            (false, true) => eprintln!("switched -> {target_name} (codex)"),
+            (false, false) => {}
+        }
     }
 
-    if running_claude_processes() > 0 {
+    if switched_claude && running_claude_processes() > 0 {
         eprintln!(
             "note: detected running `claude` process(es); restart them to pick up the new account"
         );
@@ -164,13 +228,27 @@ pub fn run(
 
     if !passthrough.is_empty() {
         let err = Command::new("claude").args(passthrough).exec();
-        // exec() only returns on failure.
         return Err(Error::Subprocess {
             cmd: "claude".into(),
             message: err.to_string(),
         });
     }
     Ok(())
+}
+
+pub fn run_claude_only(
+    paths: &Paths,
+    kc: &dyn Keychain,
+    global: &GlobalOpts,
+    target_name: &str,
+    passthrough: &[String],
+) -> Result<()> {
+    let target_account = keychain::profile_account(target_name);
+    let target_blob = kc
+        .read(&target_account)
+        .map_err(|_| Error::ProfileNotFound(target_name.to_string()))?;
+    let _target_creds = OauthCreds::parse(&target_blob)?;
+    run(paths, kc, global, target_name, passthrough)
 }
 
 pub fn run_previous(
@@ -184,27 +262,48 @@ pub fn run_previous(
     run(paths, kc, global, &prev, passthrough)
 }
 
+fn read_target_claude(kc: &dyn Keychain, target_name: &str) -> Result<Vec<u8>> {
+    let target_account = keychain::profile_account(target_name);
+    let target_blob = kc
+        .read(&target_account)
+        .map_err(|_| Error::ProfileNotFound(target_name.to_string()))?;
+    OauthCreds::parse(&target_blob)?;
+    Ok(target_blob)
+}
+
+fn rollback_claude(kc: &dyn Keychain, canonical: &str, prev: Option<&[u8]>) {
+    if let Some(prev) = prev {
+        if let Err(e) = kc.write(canonical, prev) {
+            eprintln!("error: keychain rollback failed for {canonical}: {e}");
+            tracing::error!(account = %canonical, error = %e, "keychain rollback failed");
+        }
+    }
+}
+
 fn profile_settings_path(paths: &Paths, name: &str) -> Option<std::path::PathBuf> {
     Some(paths.profile_dir(name).join("settings.json"))
 }
 
 fn atomic_replace(src: &Path, dst: &Path) -> Result<()> {
+    let bytes = fs::read(src).map_err(|e| Error::io_at(src, e))?;
+    write_bytes_atomic(dst, &bytes)
+}
+
+fn write_bytes_atomic(dst: &Path, bytes: &[u8]) -> Result<()> {
     let parent = dst
         .parent()
         .ok_or_else(|| Error::Other(format!("settings dst has no parent: {}", dst.display())))?;
     fs::create_dir_all(parent).map_err(|e| Error::io_at(parent, e))?;
-    let tmp = parent.join(format!(
-        ".cs-settings.{}.tmp",
-        std::process::id()
-    ));
-    let bytes = fs::read(src).map_err(|e| Error::io_at(src, e))?;
-    fs::write(&tmp, &bytes).map_err(|e| Error::io_at(&tmp, e))?;
+    let tmp = parent.join(format!(".cs-settings.{}.tmp", std::process::id()));
+    fs::write(&tmp, bytes).map_err(|e| Error::io_at(&tmp, e))?;
     fs::rename(&tmp, dst).map_err(|e| Error::io_at(dst, e))?;
     Ok(())
 }
 
 fn running_claude_processes() -> usize {
-    let out = Command::new("/usr/bin/pgrep").args(["-x", "claude"]).output();
+    let out = Command::new("/usr/bin/pgrep")
+        .args(["-x", "claude"])
+        .output();
     match out {
         Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
             .lines()

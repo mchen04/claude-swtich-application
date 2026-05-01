@@ -20,7 +20,11 @@ pub struct StatusReport {
 }
 
 pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &StatusArgs) -> Result<()> {
-    let report = build(paths, kc, args.name.as_deref().or(global.profile.as_deref()))?;
+    let report = build(
+        paths,
+        kc,
+        args.name.as_deref().or(global.profile.as_deref()),
+    )?;
     if global.json {
         emit_json(&report)?;
     } else {
@@ -35,10 +39,12 @@ pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &StatusA
 
 pub fn build(paths: &Paths, kc: &dyn Keychain, requested: Option<&str>) -> Result<StatusReport> {
     let state = State::load(&paths.state_file()).unwrap_or_default();
-    let target = requested.map(|s| s.to_string()).or_else(|| state.active.clone());
+    let target = requested
+        .map(|s| s.to_string())
+        .or_else(|| state.active.clone());
 
     let active_summary = match &target {
-        Some(name) => Some(load_summary(kc, &state, name)?),
+        Some(name) => Some(load_summary(paths, kc, &state, name)?),
         None => None,
     };
 
@@ -50,13 +56,28 @@ pub fn build(paths: &Paths, kc: &dyn Keychain, requested: Option<&str>) -> Resul
     })
 }
 
-fn load_summary(kc: &dyn Keychain, state: &State, name: &str) -> Result<ProfileSummary> {
+fn load_summary(
+    paths: &Paths,
+    kc: &dyn Keychain,
+    state: &State,
+    name: &str,
+) -> Result<ProfileSummary> {
     let account = keychain::profile_account(name);
-    let bytes = kc
-        .read(&account)
-        .map_err(|_| Error::ProfileNotFound(name.to_string()))?;
-    let creds = OauthCreds::parse(&bytes)?;
-    let mut summary = ProfileSummary::from_creds(name, &creds);
+    let mut summary = match kc.read(&account) {
+        Ok(bytes) => {
+            let creds = OauthCreds::parse(&bytes)?;
+            ProfileSummary::from_creds(name, &creds)
+        }
+        Err(_) => {
+            if paths.profile_codex_auth(name).exists() {
+                let mut s = ProfileSummary::unknown(name);
+                s.providers.push("codex".to_string());
+                s
+            } else {
+                return Err(Error::ProfileNotFound(name.to_string()));
+            }
+        }
+    };
     if state.active.as_deref() == Some(name) {
         summary.is_active = true;
     }
@@ -84,8 +105,16 @@ impl fmt::Display for StatusReport {
                 if let Some(plan) = &p.plan {
                     writeln!(f, "  plan    : {plan}")?;
                 }
+                if !p.providers.is_empty() {
+                    writeln!(f, "  providers: {}", p.providers.join(","))?;
+                }
                 if let Some(secs) = p.expires_in_secs {
-                    writeln!(f, "  token   : {} ({})", human_expiry(secs), p.expires_at.as_deref().unwrap_or("?"))?;
+                    writeln!(
+                        f,
+                        "  token   : {} ({})",
+                        human_expiry(secs),
+                        p.expires_at.as_deref().unwrap_or("?")
+                    )?;
                 }
                 if p.is_default {
                     writeln!(f, "  default : yes")?;

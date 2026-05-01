@@ -24,10 +24,12 @@ pub struct DoctorReport {
 #[derive(Debug, Serialize)]
 pub struct PathReport {
     pub claude_home: PathInfo,
+    pub codex_home: PathInfo,
     pub cs_home: PathInfo,
     pub config_file: PathInfo,
     pub stats_cache: PathInfo,
     pub projects_dir: PathInfo,
+    pub codex_auth: PathInfo,
     pub state_file: PathInfo,
 }
 
@@ -43,9 +45,17 @@ impl PathInfo {
     fn probe(p: PathBuf) -> Self {
         let meta = std::fs::symlink_metadata(&p).ok();
         let exists = meta.is_some();
-        let is_symlink = meta.as_ref().map(|m| m.file_type().is_symlink()).unwrap_or(false);
+        let is_symlink = meta
+            .as_ref()
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false);
         let is_dir = std::fs::metadata(&p).map(|m| m.is_dir()).unwrap_or(false);
-        Self { path: p, exists, is_dir, is_symlink }
+        Self {
+            path: p,
+            exists,
+            is_dir,
+            is_symlink,
+        }
     }
 }
 
@@ -69,15 +79,18 @@ pub struct KeychainReport {
 pub fn run(paths: &Paths, kc: &dyn Keychain) -> Result<DoctorReport> {
     let path_report = PathReport {
         claude_home: PathInfo::probe(paths.claude_home.clone()),
+        codex_home: PathInfo::probe(paths.codex_home.clone()),
         cs_home: PathInfo::probe(paths.cs_home.clone()),
         config_file: PathInfo::probe(paths.config_file.clone()),
         stats_cache: PathInfo::probe(paths.stats_cache()),
         projects_dir: PathInfo::probe(paths.projects_dir()),
+        codex_auth: PathInfo::probe(paths.codex_auth()),
         state_file: PathInfo::probe(paths.state_file()),
     };
 
     let tooling = vec![
         check_tool("claude", &["--version"]),
+        check_tool("codex", &["--version"]),
         check_tool("node", &["--version"]),
         check_tool("npx", &["--version"]),
         check_tool("bun", &["--version"]),
@@ -115,7 +128,12 @@ fn check_tool(name: &str, version_args: &[&str]) -> ToolCheck {
     let out = Command::new(name).args(version_args).output();
     match out {
         Ok(o) if o.status.success() => {
-            let v = String::from_utf8_lossy(&o.stdout).trim().lines().next().unwrap_or("").to_string();
+            let v = String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .lines()
+                .next()
+                .unwrap_or("")
+                .to_string();
             ToolCheck {
                 name: name.to_string(),
                 found: true,
@@ -129,7 +147,10 @@ fn check_tool(name: &str, version_args: &[&str]) -> ToolCheck {
             version: None,
             note: Some(format!(
                 "exited {}",
-                o.status.code().map(|c| c.to_string()).unwrap_or_else(|| "?".into())
+                o.status
+                    .code()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "?".into())
             )),
         },
         Err(_) => ToolCheck {
@@ -146,8 +167,16 @@ fn check_presence(name: &str, expected_path: &str) -> ToolCheck {
     ToolCheck {
         name: name.to_string(),
         found: exists,
-        version: if exists { Some(expected_path.to_string()) } else { None },
-        note: if exists { None } else { Some(format!("not at {expected_path}")) },
+        version: if exists {
+            Some(expected_path.to_string())
+        } else {
+            None
+        },
+        note: if exists {
+            None
+        } else {
+            Some(format!("not at {expected_path}"))
+        },
     }
 }
 
@@ -178,9 +207,7 @@ fn check_ccusage() -> ToolCheck {
 fn check_keychain(kc: &dyn Keychain) -> KeychainReport {
     match kc.list() {
         Ok(list) => {
-            let canonical_present = list
-                .iter()
-                .any(|a| !keychain::is_profile_account(a));
+            let canonical_present = list.iter().any(|a| !keychain::is_profile_account(a));
             let profiles: Vec<String> = list
                 .into_iter()
                 .filter(|a| keychain::is_profile_account(a))
@@ -230,10 +257,12 @@ impl fmt::Display for DoctorReport {
         writeln!(f)?;
         writeln!(f, "Paths")?;
         writeln!(f, "  CLAUDE_HOME : {}", fmt_path(&self.paths.claude_home))?;
+        writeln!(f, "  CODEX_HOME  : {}", fmt_path(&self.paths.codex_home))?;
         writeln!(f, "  CS_HOME     : {}", fmt_path(&self.paths.cs_home))?;
         writeln!(f, "  config      : {}", fmt_path(&self.paths.config_file))?;
         writeln!(f, "  stats-cache : {}", fmt_path(&self.paths.stats_cache))?;
         writeln!(f, "  projects/   : {}", fmt_path(&self.paths.projects_dir))?;
+        writeln!(f, "  codex auth  : {}", fmt_path(&self.paths.codex_auth))?;
         writeln!(f, "  state.json  : {}", fmt_path(&self.paths.state_file))?;
         writeln!(f)?;
         writeln!(f, "Tooling")?;
@@ -248,7 +277,11 @@ impl fmt::Display for DoctorReport {
         writeln!(
             f,
             "  canonical entry : {}",
-            if self.keychain.canonical_present { "present" } else { "missing" }
+            if self.keychain.canonical_present {
+                "present"
+            } else {
+                "missing"
+            }
         )?;
         writeln!(f, "  saved profiles  : {}", self.keychain.profile_count)?;
         for a in &self.keychain.profile_accounts {
@@ -274,7 +307,12 @@ impl fmt::Display for DoctorReport {
                 ItemState::SymlinkBroken => "BAD",
                 ItemState::SymlinkForeign => "FRN",
             };
-            writeln!(f, "  [{mark}] {:<12} {}", item.name, item.claude_path.display())?;
+            writeln!(
+                f,
+                "  [{mark}] {:<12} {}",
+                item.name,
+                item.claude_path.display()
+            )?;
         }
         Ok(())
     }
