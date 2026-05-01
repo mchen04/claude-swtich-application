@@ -130,13 +130,8 @@ impl fmt::Display for ListReport {
             };
             writeln!(
                 f,
-                "{:<3}{:<18}{:<32}{:<10}{:<24}{}",
-                mark,
-                p.name,
-                email,
-                plan,
-                expires,
-                format!(" providers={providers}")
+                "{:<3}{:<18}{:<32}{:<10}{:<24} providers={}",
+                mark, p.name, email, plan, expires, providers
             )?;
         }
         if self.active.is_none() {
