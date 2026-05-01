@@ -1,83 +1,77 @@
 use std::fmt;
 use std::fs;
+use std::os::unix::process::CommandExt;
 use std::process::Command as ProcCommand;
 
 use serde::Serialize;
 
-use crate::cli::{GlobalOpts, ProviderArgs, ProviderCommand};
+use crate::cli::{
+    ClaudeArgs, ClaudeCommand, CodexArgs, CodexCommand, GlobalOpts, NameArg, StatusArgs,
+};
+use crate::dryrun::{Action, Plan};
 use crate::error::{Error, Result};
+use crate::isolation;
 use crate::keychain::Keychain;
 use crate::lock::CsLock;
-use crate::output::{emit_json, emit_text, OutputOpts};
+use crate::output::{emit, emit_json, emit_text, OutputOpts};
 use crate::paths::Paths;
 use crate::provider::{self, CodexProfileSummary, Provider};
-use crate::state::State;
 
-pub fn run(
+pub fn run_claude(
     paths: &Paths,
     kc: &dyn Keychain,
     global: &GlobalOpts,
-    provider_kind: Provider,
-    args: &ProviderArgs,
-) -> Result<()> {
-    match provider_kind {
-        Provider::Claude => run_claude(paths, kc, global, args),
-        Provider::Codex => run_codex(paths, global, args),
-    }
-}
-
-fn run_claude(
-    paths: &Paths,
-    kc: &dyn Keychain,
-    global: &GlobalOpts,
-    args: &ProviderArgs,
+    args: &ClaudeArgs,
 ) -> Result<()> {
     match &args.command {
-        ProviderCommand::List => super::list::run(paths, kc, global),
-        ProviderCommand::Status(a) => super::status::run(paths, kc, global, a),
-        ProviderCommand::Save(a) => super::save::run(paths, kc, global, a),
-        ProviderCommand::Switch(a) => {
-            super::switch::run_claude_only(paths, kc, global, &a.name, &[])
+        ClaudeCommand::List => super::list::run(paths, kc, global),
+        ClaudeCommand::Status(a) => super::status::run(paths, kc, global, a),
+        ClaudeCommand::Save(a) => super::save::run(paths, kc, global, a),
+        ClaudeCommand::Switch(a) => super::switch::run_claude_only(paths, kc, global, &a.name, &[]),
+        ClaudeCommand::Run(a) => {
+            super::launch::run_provider_args(paths, kc, global, Provider::Claude, a)
         }
-        ProviderCommand::Refresh(a) => super::refresh::run(paths, kc, global, a),
+        ClaudeCommand::Shell(a) => {
+            super::launch::shell_provider(paths, kc, global, Provider::Claude, a)
+        }
+        ClaudeCommand::Refresh(a) => super::refresh::run(paths, kc, global, a),
     }
 }
 
-fn run_codex(paths: &Paths, global: &GlobalOpts, args: &ProviderArgs) -> Result<()> {
+pub fn run_codex(
+    paths: &Paths,
+    kc: &dyn Keychain,
+    global: &GlobalOpts,
+    args: &CodexArgs,
+) -> Result<()> {
     match &args.command {
-        ProviderCommand::List => list_codex(paths, global),
-        ProviderCommand::Status(a) => status_codex(
-            paths,
-            global,
-            a.name.as_deref().or(global.profile.as_deref()),
-        ),
-        ProviderCommand::Save(a) => save_codex(paths, global, &a.name),
-        ProviderCommand::Switch(a) => switch_codex(paths, global, &a.name),
-        ProviderCommand::Refresh(a) => refresh_codex(
-            paths,
-            global,
-            a.name.as_deref().or(global.profile.as_deref()),
-        ),
+        CodexCommand::List => list_codex(paths, global),
+        CodexCommand::Status(a) => status_codex(paths, global, a),
+        CodexCommand::Init(a) => init_codex(paths, kc, global, a),
+        CodexCommand::Login(a) => login_codex(paths, kc, global, a),
+        CodexCommand::Run(a) => {
+            super::launch::run_provider_args(paths, kc, global, Provider::Codex, a)
+        }
+        CodexCommand::Shell(a) => {
+            super::launch::shell_provider(paths, kc, global, Provider::Codex, a)
+        }
     }
 }
 
 #[derive(Debug, Serialize)]
 struct CodexListReport {
-    active: Option<String>,
-    default: Option<String>,
     profiles: Vec<CodexListEntry>,
 }
 
 #[derive(Debug, Serialize)]
 struct CodexListEntry {
     name: String,
-    summary: CodexProfileSummary,
-    is_active: bool,
-    is_default: bool,
+    initialized: bool,
+    has_auth: bool,
+    summary: Option<CodexProfileSummary>,
 }
 
 fn list_codex(paths: &Paths, global: &GlobalOpts) -> Result<()> {
-    let state = State::load(&paths.state_file()).unwrap_or_default();
     let mut profiles: Vec<CodexListEntry> = vec![];
     let root = paths.profiles_dir();
     if root.exists() {
@@ -91,25 +85,26 @@ fn list_codex(paths: &Paths, global: &GlobalOpts) -> Result<()> {
                 continue;
             }
             let name = entry.file_name().to_string_lossy().to_string();
-            let auth_path = paths.profile_codex_auth(&name);
-            if !auth_path.exists() {
+            let home = paths.profile_provider_home(&name, Provider::Codex.as_str());
+            if !home.exists() {
                 continue;
             }
-            let summary = provider::load_codex_summary(&auth_path)?;
+            let auth_path = paths.profile_codex_auth(&name);
+            let summary = if auth_path.exists() {
+                Some(provider::load_codex_summary(&auth_path)?)
+            } else {
+                None
+            };
             profiles.push(CodexListEntry {
-                name: name.clone(),
+                name,
+                initialized: true,
+                has_auth: summary.is_some(),
                 summary,
-                is_active: state.active_codex.as_deref() == Some(name.as_str()),
-                is_default: state.default.as_deref() == Some(name.as_str()),
             });
         }
     }
     profiles.sort_by(|a, b| a.name.cmp(&b.name));
-    let report = CodexListReport {
-        active: state.active_codex,
-        default: state.default,
-        profiles,
-    };
+    let report = CodexListReport { profiles };
     if global.json {
         emit_json(&report)
     } else {
@@ -125,44 +120,35 @@ fn list_codex(paths: &Paths, global: &GlobalOpts) -> Result<()> {
 
 #[derive(Debug, Serialize)]
 struct CodexStatusReport {
-    active: Option<CodexStatusEntry>,
-    default: Option<String>,
-    previous: Option<String>,
-    asked_about: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct CodexStatusEntry {
     name: String,
-    summary: CodexProfileSummary,
-    is_active: bool,
-    is_default: bool,
+    initialized: bool,
+    has_auth: bool,
+    home: String,
+    summary: Option<CodexProfileSummary>,
 }
 
-fn status_codex(paths: &Paths, global: &GlobalOpts, requested: Option<&str>) -> Result<()> {
-    let state = State::load(&paths.state_file()).unwrap_or_default();
-    let target = requested
-        .map(|s| s.to_string())
-        .or_else(|| state.active_codex.clone());
-    let active = if let Some(name) = target {
-        let path = paths.profile_codex_auth(&name);
-        if !path.exists() {
-            return Err(Error::ProfileNotFound(name));
-        }
-        Some(CodexStatusEntry {
-            summary: provider::load_codex_summary(&path)?,
-            is_active: state.active_codex.as_deref() == Some(name.as_str()),
-            is_default: state.default.as_deref() == Some(name.as_str()),
-            name,
-        })
+fn status_codex(paths: &Paths, global: &GlobalOpts, args: &StatusArgs) -> Result<()> {
+    let name = args
+        .name
+        .clone()
+        .or(global.profile.clone())
+        .ok_or_else(|| Error::Other("profile name required: `cs codex status <name>`".into()))?;
+    let home = paths.profile_provider_home(&name, Provider::Codex.as_str());
+    if !home.exists() {
+        return Err(Error::ProfileNotFound(name));
+    }
+    let auth_path = paths.profile_codex_auth(&name);
+    let summary = if auth_path.exists() {
+        Some(provider::load_codex_summary(&auth_path)?)
     } else {
         None
     };
     let report = CodexStatusReport {
-        active,
-        default: state.default,
-        previous: state.previous_codex,
-        asked_about: requested.map(|s| s.to_string()),
+        name,
+        initialized: true,
+        has_auth: summary.is_some(),
+        home: home.display().to_string(),
+        summary,
     };
     if global.json {
         emit_json(&report)
@@ -177,145 +163,100 @@ fn status_codex(paths: &Paths, global: &GlobalOpts, requested: Option<&str>) -> 
     }
 }
 
-fn save_codex(paths: &Paths, global: &GlobalOpts, name: &str) -> Result<()> {
-    let active_blob = provider::read_codex_active_blob(paths).map_err(|e| {
-        Error::Other(format!(
-            "no active Codex credential to save (run `codex login` first): {e}"
-        ))
-    })?;
-    let _summary = serde_json::from_slice::<serde_json::Value>(&active_blob)?;
-    let dst = paths.profile_codex_auth(name);
-    if dst.exists() && !global.dry_run {
-        return Err(Error::ProfileExists(name.to_string()));
-    }
+fn init_codex(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &NameArg) -> Result<()> {
     if global.dry_run {
-        eprintln!(
-            "would write {} bytes -> {}",
-            active_blob.len(),
-            dst.display()
+        let env = isolation::preview_env_for_provider(paths, kc, Provider::Codex, &args.name)?;
+        let mut plan = Plan::new();
+        for (key, value) in env {
+            plan.push(Action::Note {
+                message: format!("export {key}={value}"),
+            });
+        }
+        return emit(
+            OutputOpts {
+                json: global.json,
+                no_color: global.no_color,
+            },
+            &plan,
         );
-        return Ok(());
     }
+
     let _lock = CsLock::acquire(paths)?;
-    provider::write_codex_profile_blob(paths, name, &active_blob)?;
-    eprintln!("saved codex profile `{name}` ({} bytes)", active_blob.len());
+    let home = isolation::ensure_codex_home(paths, &args.name)?;
+    eprintln!(
+        "initialized codex profile `{}` at {}",
+        args.name,
+        home.display()
+    );
     Ok(())
 }
 
-fn switch_codex(paths: &Paths, global: &GlobalOpts, name: &str) -> Result<()> {
-    let blob = provider::read_codex_profile_blob(paths, name)
-        .map_err(|_| Error::ProfileNotFound(name.to_string()))?;
-    let _summary = serde_json::from_slice::<serde_json::Value>(&blob)?;
+fn login_codex(
+    paths: &Paths,
+    kc: &dyn Keychain,
+    global: &GlobalOpts,
+    args: &NameArg,
+) -> Result<()> {
+    let env = if global.dry_run {
+        isolation::preview_env_for_provider(paths, kc, Provider::Codex, &args.name)?
+    } else {
+        let _lock = CsLock::acquire(paths)?;
+        isolation::env_for_provider(paths, kc, Provider::Codex, &args.name)?
+    };
     if global.dry_run {
-        eprintln!("would switch codex -> {name}");
-        return Ok(());
-    }
-    let _lock = CsLock::acquire(paths)?;
-    let prev = provider::read_codex_active_blob(paths).ok();
-    provider::write_codex_active_blob(paths, &blob)?;
-    let verify = provider::read_codex_active_blob(paths)?;
-    if verify != blob {
-        if let Some(prev_bytes) = prev.as_deref() {
-            let _ = provider::write_codex_active_blob(paths, prev_bytes);
+        let mut plan = Plan::new();
+        for (key, value) in &env {
+            plan.push(Action::Note {
+                message: format!("export {key}={value}"),
+            });
         }
-        return Err(Error::Other(
-            "codex auth write verification failed; rolled back to previous".into(),
-        ));
-    }
-    let state_path = paths.state_file();
-    let mut state = State::load(&state_path).unwrap_or_default();
-    if state.active_codex.as_deref() != Some(name) {
-        state.previous_codex = state.active_codex.clone();
-    }
-    state.active_codex = Some(name.to_string());
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
-    state.switched_at_ms = Some(now_ms);
-    state.since_ms = Some(now_ms);
-    state.active = Some(name.to_string());
-    state.previous = state.previous_codex.clone();
-    state.save(&state_path)?;
-    eprintln!("switched codex -> {name}");
-    Ok(())
-}
-
-fn refresh_codex(paths: &Paths, global: &GlobalOpts, requested: Option<&str>) -> Result<()> {
-    let state = State::load(&paths.state_file()).unwrap_or_default();
-    let target = requested
-        .map(|s| s.to_string())
-        .or_else(|| state.active_codex.clone())
-        .ok_or(Error::NoActiveProfile)?;
-    let auth_path = paths.profile_codex_auth(&target);
-    if !auth_path.exists() {
-        return Err(Error::ProfileNotFound(target));
-    }
-    if global.dry_run {
-        eprintln!(
-            "would run `codex login status` to validate refresh for `{}`",
-            target
+        plan.push(Action::SpawnProcess {
+            cmd: "codex".into(),
+            args: vec!["login".into()],
+        });
+        return emit(
+            OutputOpts {
+                json: global.json,
+                no_color: global.no_color,
+            },
+            &plan,
         );
-        return Ok(());
     }
-    if state.active_codex.as_deref() != Some(target.as_str()) {
-        switch_codex(paths, global, &target)?;
-    }
-    let out = ProcCommand::new("codex").args(["login", "status"]).output();
-    match out {
-        Ok(o) if o.status.success() => {
-            eprintln!(
-                "codex auth checked via `codex login status` for `{}`",
-                target
-            );
-            Ok(())
-        }
-        Ok(o) => Err(Error::Subprocess {
-            cmd: "codex login status".into(),
-            message: format!(
-                "exit {}: {}",
-                o.status.code().unwrap_or(-1),
-                String::from_utf8_lossy(&o.stderr)
-            ),
-        }),
-        Err(e) => Err(Error::Subprocess {
-            cmd: "codex login status".into(),
-            message: e.to_string(),
-        }),
-    }
+
+    let err = ProcCommand::new("codex").arg("login").envs(env).exec();
+    Err(Error::Subprocess {
+        cmd: "codex login".into(),
+        message: err.to_string(),
+    })
 }
 
 struct CodexListText<'a>(&'a CodexListReport);
+
 impl fmt::Display for CodexListText<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.0.profiles.is_empty() {
-            writeln!(f, "(no codex profiles saved)")?;
-            writeln!(f, "save one with `cs codex save <name>`")?;
+            writeln!(f, "(no codex profiles initialized)")?;
+            writeln!(f, "create one with `cs codex init <name>`")?;
             return Ok(());
         }
-        writeln!(
-            f,
-            "{:<3}{:<18}{:<12}{:<28}{:<8}",
-            "", "PROFILE", "AUTH", "ACCOUNT", "REFRESH"
-        )?;
-        for p in &self.0.profiles {
-            let mark = match (p.is_active, p.is_default) {
-                (true, true) => "*D",
-                (true, false) => "* ",
-                (false, true) => " D",
-                _ => "  ",
-            };
-            let auth = p.summary.auth_mode.as_deref().unwrap_or("—");
-            let acct = p.summary.account_id.as_deref().unwrap_or("—");
-            let refresh = if p.summary.has_refresh_token {
-                "yes"
-            } else {
-                "no"
+        writeln!(f, "{:<18}{:<8}{:<36}REFRESH", "PROFILE", "AUTH", "ACCOUNT")?;
+        for profile in &self.0.profiles {
+            let (auth, account, refresh) = match &profile.summary {
+                Some(summary) => (
+                    summary.auth_mode.as_deref().unwrap_or("yes"),
+                    summary.account_id.as_deref().unwrap_or("—"),
+                    if summary.has_refresh_token {
+                        "yes"
+                    } else {
+                        "no"
+                    },
+                ),
+                None => ("no", "—", "—"),
             };
             writeln!(
                 f,
-                "{:<3}{:<18}{:<12}{:<28}{:<8}",
-                mark, p.name, auth, acct, refresh
+                "{:<18}{:<8}{:<36}{}",
+                profile.name, auth, account, refresh
             )?;
         }
         Ok(())
@@ -323,52 +264,36 @@ impl fmt::Display for CodexListText<'_> {
 }
 
 struct CodexStatusText<'a>(&'a CodexStatusReport);
+
 impl fmt::Display for CodexStatusText<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self.0.active {
-            None => {
-                writeln!(f, "(no active codex profile)")?;
-                if let Some(d) = &self.0.default {
-                    writeln!(f, "default: {d}")?;
-                }
+        writeln!(f, "codex profile: {}", self.0.name)?;
+        writeln!(f, "  home      : {}", self.0.home)?;
+        writeln!(
+            f,
+            "  auth      : {}",
+            if self.0.has_auth {
+                "present"
+            } else {
+                "missing (run `cs codex login <name>`)"
             }
-            Some(s) => {
-                writeln!(f, "active codex profile: {}", s.name)?;
-                writeln!(
-                    f,
-                    "  auth mode : {}",
-                    s.summary.auth_mode.as_deref().unwrap_or("unknown")
-                )?;
-                writeln!(
-                    f,
-                    "  account   : {}",
-                    s.summary.account_id.as_deref().unwrap_or("—")
-                )?;
-                if let Some(ts) = &s.summary.last_refresh {
-                    writeln!(f, "  refreshed : {ts}")?;
-                }
-                writeln!(
-                    f,
-                    "  api key   : {}",
-                    if s.summary.has_api_key {
-                        "present"
-                    } else {
-                        "absent"
-                    }
-                )?;
-                writeln!(
-                    f,
-                    "  refresh   : {}",
-                    if s.summary.has_refresh_token {
-                        "present"
-                    } else {
-                        "absent"
-                    }
-                )?;
-                if let Some(prev) = &self.0.previous {
-                    writeln!(f, "  previous  : {prev}")?;
-                }
+        )?;
+        if let Some(summary) = &self.0.summary {
+            if let Some(mode) = &summary.auth_mode {
+                writeln!(f, "  mode      : {mode}")?;
             }
+            if let Some(account) = &summary.account_id {
+                writeln!(f, "  account   : {account}")?;
+            }
+            writeln!(
+                f,
+                "  refresh   : {}",
+                if summary.has_refresh_token {
+                    "yes"
+                } else {
+                    "no"
+                }
+            )?;
         }
         Ok(())
     }

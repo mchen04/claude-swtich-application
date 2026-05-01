@@ -7,7 +7,11 @@ use crate::state::State;
 
 pub fn set(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &NameArg) -> Result<()> {
     let target = keychain::profile_account(&args.name);
-    if kc.read(&target).is_err() && !paths.profile_codex_auth(&args.name).exists() {
+    if kc.read(&target).is_err()
+        && !paths
+            .profile_provider_home(&args.name, crate::provider::Provider::Codex.as_str())
+            .exists()
+    {
         return Err(Error::ProfileNotFound(args.name.clone()));
     }
     if global.dry_run {

@@ -69,7 +69,10 @@ fn load_summary(
             ProfileSummary::from_creds(name, &creds)
         }
         Err(_) => {
-            if paths.profile_codex_auth(name).exists() {
+            if paths
+                .profile_provider_home(name, crate::provider::Provider::Codex.as_str())
+                .exists()
+            {
                 let mut s = ProfileSummary::unknown(name);
                 s.providers.push("codex".to_string());
                 s

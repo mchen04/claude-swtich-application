@@ -51,7 +51,10 @@ pub fn build(paths: &Paths, kc: &dyn Keychain) -> Result<ListReport> {
                         continue;
                     }
                     let name = entry.file_name().to_string_lossy().to_string();
-                    if paths.profile_codex_auth(&name).exists() {
+                    if paths
+                        .profile_provider_home(&name, crate::provider::Provider::Codex.as_str())
+                        .exists()
+                    {
                         names.insert(name);
                     }
                 }
@@ -72,7 +75,10 @@ pub fn build(paths: &Paths, kc: &dyn Keychain) -> Result<ListReport> {
         if kc.read(&account).is_ok() {
             summary.providers.push("claude".to_string());
         }
-        if paths.profile_codex_auth(&name).exists() {
+        if paths
+            .profile_provider_home(&name, crate::provider::Provider::Codex.as_str())
+            .exists()
+        {
             summary.providers.push("codex".to_string());
         }
         profiles.push(summary);
@@ -101,7 +107,7 @@ impl fmt::Display for ListReport {
             writeln!(f, "(no profiles saved)")?;
             writeln!(
                 f,
-                "Save the active Claude Code account with `cs save <name>`."
+                "Save Claude with `cs save <name>` or initialize Codex with `cs codex init <name>`."
             )?;
             return Ok(());
         }

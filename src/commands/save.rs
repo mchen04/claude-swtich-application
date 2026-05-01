@@ -14,53 +14,38 @@ pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &SaveArg
     let target = keychain::profile_account(&args.name);
 
     let canonical_blob = kc.read(&canonical).ok();
-    let codex_blob = provider::read_codex_active_blob(paths).ok();
+    let claude_settings = std::fs::read(paths.claude_settings()).ok();
 
     let mut will_save_claude = false;
     if let Some(blob) = canonical_blob.as_deref() {
         OauthCreds::parse(blob)?;
         will_save_claude = true;
     }
-    let mut will_save_codex = false;
-    if let Some(blob) = codex_blob.as_deref() {
-        let _ = serde_json::from_slice::<serde_json::Value>(blob)?;
-        will_save_codex = true;
-    }
 
-    if !will_save_claude && !will_save_codex {
+    if !will_save_claude {
         return Err(Error::Other(
-            "no active Claude or Codex credentials to save (run `claude /login` or `codex login` first)"
-                .into(),
+            "no active Claude credential to save (run `claude /login` first)".into(),
         ));
     }
 
     let pre_existing_claude = kc.read(&target).ok();
-    let codex_profile = paths.profile_codex_auth(&args.name);
-    let pre_existing_codex = codex_profile.exists();
-    if !global.dry_run {
-        if will_save_claude && pre_existing_claude.is_some() {
-            return Err(Error::ProfileExists(args.name.clone()));
-        }
-        if will_save_codex && pre_existing_codex {
-            return Err(Error::ProfileExists(args.name.clone()));
-        }
+    if !global.dry_run && pre_existing_claude.is_some() {
+        return Err(Error::ProfileExists(args.name.clone()));
     }
 
     if global.dry_run {
         let mut plan = Plan::new();
-        if will_save_claude {
-            plan.push(Action::KeychainWrite {
-                account: target.clone(),
-                bytes: canonical_blob.as_deref().map(|b| b.len()).unwrap_or(0),
-            });
-        }
-        if will_save_codex {
+        plan.push(Action::KeychainWrite {
+            account: target.clone(),
+            bytes: canonical_blob.as_deref().map(|b| b.len()).unwrap_or(0),
+        });
+        if let Some(bytes) = claude_settings.as_deref() {
             plan.push(Action::WriteFile {
-                path: codex_profile.clone(),
-                bytes: codex_blob.as_deref().map(|b| b.len()).unwrap_or(0),
+                path: paths.profile_claude_settings(&args.name),
+                bytes: bytes.len(),
             });
         }
-        if pre_existing_claude.is_some() || pre_existing_codex {
+        if pre_existing_claude.is_some() {
             plan.push(Action::Note {
                 message: format!(
                     "would refuse: profile `{}` already exists (use `cs rm` first)",
@@ -79,31 +64,24 @@ pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &SaveArg
     let _lock = CsLock::acquire(paths)?;
     let mut manifest = Manifest::new("save");
 
-    if will_save_claude {
-        let canonical_blob = canonical_blob.expect("checked above");
-        kc.write(&target, &canonical_blob)?;
-        match kc.read(&target) {
-            Ok(roundtrip) if roundtrip == canonical_blob => {}
-            Ok(_) | Err(_) => {
-                let _ = kc.delete(&target);
-                return Err(Error::Other(format!(
-                    "Keychain write verification failed for {target}; rolled back"
-                )));
-            }
+    let canonical_blob = canonical_blob.expect("checked above");
+    kc.write(&target, &canonical_blob)?;
+    match kc.read(&target) {
+        Ok(roundtrip) if roundtrip == canonical_blob => {}
+        Ok(_) | Err(_) => {
+            let _ = kc.delete(&target);
+            return Err(Error::Other(format!(
+                "Keychain write verification failed for {target}; rolled back"
+            )));
         }
-        manifest.push(BackupAction::KeychainReplace {
-            account: target.clone(),
-            before_b64: None,
-            after_b64: Some(crate::backup::b64(&canonical_blob)),
-        });
     }
-
-    if will_save_codex {
-        let codex_blob = codex_blob.expect("checked above");
-        provider::write_codex_profile_blob(paths, &args.name, &codex_blob)?;
-        manifest.push(BackupAction::Note {
-            message: format!("saved codex profile blob to {}", codex_profile.display()),
-        });
+    manifest.push(BackupAction::KeychainReplace {
+        account: target.clone(),
+        before_b64: None,
+        after_b64: Some(crate::backup::b64(&canonical_blob)),
+    });
+    if let Some(settings) = claude_settings.as_deref() {
+        provider::write_path_atomic(&paths.profile_claude_settings(&args.name), settings)?;
     }
 
     if let Err(e) = manifest.write(paths) {
@@ -111,11 +89,6 @@ pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &SaveArg
         eprintln!("warning: failed to write rollback manifest: {e}");
     }
 
-    match (will_save_claude, will_save_codex) {
-        (true, true) => eprintln!("saved profile `{}` for claude + codex", args.name),
-        (true, false) => eprintln!("saved profile `{}` for claude", args.name),
-        (false, true) => eprintln!("saved profile `{}` for codex", args.name),
-        (false, false) => {}
-    }
+    eprintln!("saved profile `{}` for claude", args.name);
     Ok(())
 }

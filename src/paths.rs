@@ -62,8 +62,21 @@ impl Paths {
         self.profile_dir(name).join("providers").join(provider)
     }
 
+    pub fn profile_claude_settings(&self, name: &str) -> PathBuf {
+        self.profile_dir(name).join("settings.json")
+    }
+
     pub fn profile_codex_auth(&self, name: &str) -> PathBuf {
-        self.profile_provider_dir(name, "codex").join("auth.json")
+        self.profile_provider_home(name, "codex").join("auth.json")
+    }
+
+    pub fn profile_codex_config(&self, name: &str) -> PathBuf {
+        self.profile_provider_home(name, "codex")
+            .join("config.toml")
+    }
+
+    pub fn profile_provider_home(&self, name: &str, provider: &str) -> PathBuf {
+        self.profile_provider_dir(name, provider).join("home")
     }
 
     pub fn backups_dir(&self) -> PathBuf {
@@ -104,6 +117,14 @@ impl Paths {
 
     pub fn codex_auth(&self) -> PathBuf {
         self.codex_home.join("auth.json")
+    }
+
+    pub fn codex_config(&self) -> PathBuf {
+        self.codex_home.join("config.toml")
+    }
+
+    pub fn codex_skills_dir(&self) -> PathBuf {
+        self.codex_home.join("skills")
     }
 
     pub fn ensure_cs_home(&self) -> Result<()> {

@@ -17,12 +17,6 @@ pub struct State {
     /// Previous profile for Claude provider.
     #[serde(default)]
     pub previous_claude: Option<String>,
-    /// Active profile for Codex provider.
-    #[serde(default)]
-    pub active_codex: Option<String>,
-    /// Previous profile for Codex provider.
-    #[serde(default)]
-    pub previous_codex: Option<String>,
     pub default: Option<String>,
     /// Profile that owns the shared skills/commands/agents/CLAUDE.md tree.
     #[serde(default)]

@@ -5,6 +5,7 @@ mod dashboard;
 mod doctor;
 mod dryrun;
 mod error;
+mod isolation;
 mod jsonio;
 mod keychain;
 mod links;
@@ -65,6 +66,8 @@ fn dispatch(paths: &Paths, kc: &dyn Keychain, cli: &Cli) -> Result<()> {
         Some(Command::Default(a)) => commands::default::set(paths, kc, &cli.global, a),
         Some(Command::DefaultGo) => commands::default::go(paths, kc, &cli.global),
         Some(Command::Refresh(a)) => commands::refresh::run(paths, kc, &cli.global, a),
+        Some(Command::Run(a)) => commands::launch::run_generic(paths, kc, &cli.global, a),
+        Some(Command::Shell(a)) => commands::launch::shell_generic(paths, kc, &cli.global, a),
         Some(Command::Setup(a)) => commands::setup::run(paths, &cli.global, a),
         Some(Command::Alias(a)) => commands::alias::run(paths, &cli.global, a),
         Some(Command::Migrate(a)) => commands::migrate::run(paths, kc, &cli.global, a),
@@ -73,12 +76,8 @@ fn dispatch(paths: &Paths, kc: &dyn Keychain, cli: &Cli) -> Result<()> {
         Some(Command::Links) => commands::link::list(paths, &cli.global),
         Some(Command::Uninstall(a)) => commands::uninstall::run(paths, &cli.global, a),
         Some(Command::Tui) => commands::tui::run(),
-        Some(Command::Claude(a)) => {
-            commands::provider::run(paths, kc, &cli.global, crate::provider::Provider::Claude, a)
-        }
-        Some(Command::Codex(a)) => {
-            commands::provider::run(paths, kc, &cli.global, crate::provider::Provider::Codex, a)
-        }
+        Some(Command::Claude(a)) => commands::provider::run_claude(paths, kc, &cli.global, a),
+        Some(Command::Codex(a)) => commands::provider::run_codex(paths, kc, &cli.global, a),
         Some(Command::Switch(a)) => {
             commands::switch::run(paths, kc, &cli.global, &a.name, &a.passthrough)
         }

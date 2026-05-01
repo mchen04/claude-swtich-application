@@ -16,9 +16,9 @@ pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &NameArg
 
     let target = keychain::profile_account(&args.name);
     let existing = kc.read(&target).ok();
-    let codex_profile = paths.profile_codex_auth(&args.name);
-    let has_codex = codex_profile.exists();
-    if existing.is_none() && !has_codex {
+    let profile_dir = paths.profile_dir(&args.name);
+    let has_profile_dir = profile_dir.exists();
+    if existing.is_none() && !has_profile_dir {
         return Err(Error::ProfileNotFound(args.name.clone()));
     }
 
@@ -29,9 +29,9 @@ pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &NameArg
                 account: target.clone(),
             });
         }
-        if has_codex {
+        if has_profile_dir {
             plan.push(Action::Note {
-                message: format!("would remove {}", codex_profile.display()),
+                message: format!("would remove {}", profile_dir.display()),
             });
         }
         let opts = OutputOpts {
@@ -46,8 +46,8 @@ pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &NameArg
     if existing.is_some() {
         kc.delete(&target)?;
     }
-    if has_codex {
-        std::fs::remove_file(&codex_profile).map_err(|e| Error::io_at(&codex_profile, e))?;
+    if has_profile_dir {
+        std::fs::remove_dir_all(&profile_dir).map_err(|e| Error::io_at(&profile_dir, e))?;
     }
 
     // Clean up state references to this profile (default/active/previous) — but never
@@ -76,14 +76,6 @@ pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &NameArg
         state.previous_claude = None;
         changed = true;
     }
-    if state.active_codex.as_deref() == Some(&args.name) {
-        state.active_codex = None;
-        changed = true;
-    }
-    if state.previous_codex.as_deref() == Some(&args.name) {
-        state.previous_codex = None;
-        changed = true;
-    }
     if changed {
         state.save(&path)?;
     }
@@ -96,9 +88,9 @@ pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &NameArg
             after_b64: None,
         });
     }
-    if has_codex {
+    if has_profile_dir {
         manifest.push(BackupAction::Note {
-            message: format!("removed codex profile blob {}", codex_profile.display()),
+            message: format!("removed profile dir {}", profile_dir.display()),
         });
     }
     if let Err(e) = manifest.write(paths) {

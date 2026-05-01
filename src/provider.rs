@@ -1,13 +1,12 @@
 use std::fmt;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
-use crate::paths::Paths;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "snake_case")]
 pub enum Provider {
     Claude,
@@ -79,28 +78,8 @@ pub fn load_codex_summary(path: &Path) -> Result<CodexProfileSummary> {
     })
 }
 
-pub fn codex_profile_path(paths: &Paths, name: &str) -> PathBuf {
-    paths.profile_codex_auth(name)
-}
-
-pub fn read_codex_active_blob(paths: &Paths) -> Result<Vec<u8>> {
-    let path = paths.codex_auth();
-    fs::read(&path).map_err(|e| Error::io_at(path, e))
-}
-
-pub fn read_codex_profile_blob(paths: &Paths, name: &str) -> Result<Vec<u8>> {
-    let path = codex_profile_path(paths, name);
-    fs::read(&path).map_err(|e| Error::io_at(path, e))
-}
-
-pub fn write_codex_profile_blob(paths: &Paths, name: &str, bytes: &[u8]) -> Result<()> {
-    let path = codex_profile_path(paths, name);
-    write_blob_atomic(&path, bytes)
-}
-
-pub fn write_codex_active_blob(paths: &Paths, bytes: &[u8]) -> Result<()> {
-    let path = paths.codex_auth();
-    write_blob_atomic(&path, bytes)
+pub fn write_path_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    write_blob_atomic(path, bytes)
 }
 
 fn write_blob_atomic(path: &Path, bytes: &[u8]) -> Result<()> {

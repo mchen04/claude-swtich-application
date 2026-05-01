@@ -13,7 +13,6 @@ use crate::lock::CsLock;
 use crate::output::OutputOpts;
 use crate::paths::Paths;
 use crate::profile::OauthCreds;
-use crate::provider;
 use crate::state::State;
 
 pub fn run(
@@ -23,33 +22,19 @@ pub fn run(
     target_name: &str,
     passthrough: &[String],
 ) -> Result<()> {
-    let claude_target = read_target_claude(kc, target_name);
-    let codex_target = provider::read_codex_profile_blob(paths, target_name).ok();
-    let has_any = claude_target.is_ok() || codex_target.is_some();
-    if !has_any {
-        return Err(Error::ProfileNotFound(target_name.to_string()));
-    }
+    let claude_target = read_target_claude(kc, target_name)?;
 
     if global.dry_run {
         let mut plan = Plan::new();
-        if let Ok(blob) = claude_target.as_ref() {
-            plan.push(Action::KeychainWrite {
-                account: keychain::canonical_account(),
-                bytes: blob.len(),
-            });
-            if let Some(profile_settings) = profile_settings_path(paths, target_name) {
-                if profile_settings.exists() {
-                    plan.push(Action::Copy {
-                        from: profile_settings,
-                        to: paths.claude_settings(),
-                    });
-                }
-            }
-        }
-        if let Some(blob) = codex_target.as_ref() {
-            plan.push(Action::WriteFile {
-                path: paths.codex_auth(),
-                bytes: blob.len(),
+        plan.push(Action::KeychainWrite {
+            account: keychain::canonical_account(),
+            bytes: claude_target.len(),
+        });
+        let profile_settings = profile_settings_path(paths, target_name);
+        if profile_settings.exists() {
+            plan.push(Action::Copy {
+                from: profile_settings,
+                to: paths.claude_settings(),
             });
         }
         plan.push(Action::WriteFile {
@@ -79,71 +64,39 @@ pub fn run(
 
     let canonical = keychain::canonical_account();
     let prev_canonical_blob = kc.read(&canonical).ok();
-    let prev_codex_blob = provider::read_codex_active_blob(paths).ok();
     let prev_settings = fs::read(paths.claude_settings()).ok();
     let state_path = paths.state_file();
     let mut state = State::load(&state_path).unwrap_or_default();
     let prev_state_value = serde_json::to_value(&state).ok();
     let prior_active = state.active.clone();
 
-    let mut switched_claude = false;
-    if let Ok(target_blob) = claude_target {
-        switched_claude = true;
-        let target_creds = OauthCreds::parse(&target_blob)?;
-        if target_creds.is_expired(std::time::Duration::from_secs(60)) {
-            eprintln!(
-                "warning: target Claude profile `{}` token is near expiry; consider `cs refresh {}` first",
-                target_name, target_name
-            );
-        }
-        // Atomic-ish keychain swap with verify + rollback.
-        kc.write(&canonical, &target_blob)?;
-        match kc.read(&canonical) {
-            Ok(b) if b == target_blob => {}
-            Ok(_) | Err(_) => {
-                rollback_claude(kc, &canonical, prev_canonical_blob.as_deref());
-                return Err(Error::Other(
-                    "canonical Keychain write verification failed; rolled back to previous".into(),
-                ));
-            }
-        }
-        if let Some(profile_settings) = profile_settings_path(paths, target_name) {
-            if profile_settings.exists() {
-                if let Err(e) = atomic_replace(&profile_settings, &paths.claude_settings()) {
-                    rollback_claude(kc, &canonical, prev_canonical_blob.as_deref());
-                    if let Some(prev) = prev_settings.as_deref() {
-                        let _ = write_bytes_atomic(&paths.claude_settings(), prev);
-                    }
-                    return Err(e);
-                }
-            }
+    let target_creds = OauthCreds::parse(&claude_target)?;
+    if target_creds.is_expired(std::time::Duration::from_secs(60)) {
+        eprintln!(
+            "warning: target Claude profile `{}` token is near expiry; consider `cs refresh {}` first",
+            target_name, target_name
+        );
+    }
+
+    kc.write(&canonical, &claude_target)?;
+    match kc.read(&canonical) {
+        Ok(b) if b == claude_target => {}
+        Ok(_) | Err(_) => {
+            rollback_claude(kc, &canonical, prev_canonical_blob.as_deref());
+            return Err(Error::Other(
+                "canonical Keychain write verification failed; rolled back to previous".into(),
+            ));
         }
     }
 
-    let mut switched_codex = false;
-    if let Some(target_blob) = codex_target {
-        switched_codex = true;
-        if let Err(e) = provider::write_codex_active_blob(paths, &target_blob) {
+    let profile_settings = profile_settings_path(paths, target_name);
+    if profile_settings.exists() {
+        if let Err(e) = atomic_replace(&profile_settings, &paths.claude_settings()) {
             rollback_claude(kc, &canonical, prev_canonical_blob.as_deref());
             if let Some(prev) = prev_settings.as_deref() {
                 let _ = write_bytes_atomic(&paths.claude_settings(), prev);
             }
             return Err(e);
-        }
-        match provider::read_codex_active_blob(paths) {
-            Ok(b) if b == target_blob => {}
-            Ok(_) | Err(_) => {
-                rollback_claude(kc, &canonical, prev_canonical_blob.as_deref());
-                if let Some(prev) = prev_settings.as_deref() {
-                    let _ = write_bytes_atomic(&paths.claude_settings(), prev);
-                }
-                if let Some(prev) = prev_codex_blob.as_deref() {
-                    let _ = provider::write_codex_active_blob(paths, prev);
-                }
-                return Err(Error::Other(
-                    "codex auth write verification failed; rolled back to previous".into(),
-                ));
-            }
         }
     }
 
@@ -157,18 +110,10 @@ pub fn run(
     state.active = Some(target_name.to_string());
     state.switched_at_ms = Some(now_ms);
     state.since_ms = Some(now_ms);
-    if switched_claude {
-        if state.active_claude.as_deref() != Some(target_name) {
-            state.previous_claude = state.active_claude.clone();
-        }
-        state.active_claude = Some(target_name.to_string());
+    if state.active_claude.as_deref() != Some(target_name) {
+        state.previous_claude = state.active_claude.clone();
     }
-    if switched_codex {
-        if state.active_codex.as_deref() != Some(target_name) {
-            state.previous_codex = state.active_codex.clone();
-        }
-        state.active_codex = Some(target_name.to_string());
-    }
+    state.active_claude = Some(target_name.to_string());
     state.save(&state_path)?;
 
     let marker = paths.active_profile_marker();
@@ -180,26 +125,19 @@ pub fn run(
     }
 
     let mut manifest = Manifest::new("switch");
-    if switched_claude {
-        let target_blob = kc.read(&canonical).ok();
-        manifest.push(BackupAction::KeychainReplace {
-            account: canonical.clone(),
-            before_b64: prev_canonical_blob.as_deref().map(crate::backup::b64),
-            after_b64: target_blob.as_deref().map(crate::backup::b64),
-        });
-        if let Some(prev) = &prev_settings {
-            manifest.push(BackupAction::SettingsReplace {
-                before_b64: Some(crate::backup::b64(prev)),
-                after_b64: fs::read(paths.claude_settings())
-                    .ok()
-                    .as_deref()
-                    .map(crate::backup::b64),
-            });
-        }
-    }
-    if switched_codex {
-        manifest.push(BackupAction::Note {
-            message: format!("codex auth switched via {}", paths.codex_auth().display()),
+    let target_blob = kc.read(&canonical).ok();
+    manifest.push(BackupAction::KeychainReplace {
+        account: canonical.clone(),
+        before_b64: prev_canonical_blob.as_deref().map(crate::backup::b64),
+        after_b64: target_blob.as_deref().map(crate::backup::b64),
+    });
+    if let Some(prev) = &prev_settings {
+        manifest.push(BackupAction::SettingsReplace {
+            before_b64: Some(crate::backup::b64(prev)),
+            after_b64: fs::read(paths.claude_settings())
+                .ok()
+                .as_deref()
+                .map(crate::backup::b64),
         });
     }
     manifest.push(BackupAction::StateReplace {
@@ -212,15 +150,10 @@ pub fn run(
     }
 
     if !global.json {
-        match (switched_claude, switched_codex) {
-            (true, true) => eprintln!("switched -> {target_name} (claude + codex)"),
-            (true, false) => eprintln!("switched -> {target_name} (claude)"),
-            (false, true) => eprintln!("switched -> {target_name} (codex)"),
-            (false, false) => {}
-        }
+        eprintln!("switched -> {target_name} (claude)");
     }
 
-    if switched_claude && running_claude_processes() > 0 {
+    if running_claude_processes() > 0 {
         eprintln!(
             "note: detected running `claude` process(es); restart them to pick up the new account"
         );
@@ -243,11 +176,7 @@ pub fn run_claude_only(
     target_name: &str,
     passthrough: &[String],
 ) -> Result<()> {
-    let target_account = keychain::profile_account(target_name);
-    let target_blob = kc
-        .read(&target_account)
-        .map_err(|_| Error::ProfileNotFound(target_name.to_string()))?;
-    let _target_creds = OauthCreds::parse(&target_blob)?;
+    read_target_claude(kc, target_name)?;
     run(paths, kc, global, target_name, passthrough)
 }
 
@@ -280,8 +209,8 @@ fn rollback_claude(kc: &dyn Keychain, canonical: &str, prev: Option<&[u8]>) {
     }
 }
 
-fn profile_settings_path(paths: &Paths, name: &str) -> Option<std::path::PathBuf> {
-    Some(paths.profile_dir(name).join("settings.json"))
+fn profile_settings_path(paths: &Paths, name: &str) -> std::path::PathBuf {
+    paths.profile_claude_settings(name)
 }
 
 fn atomic_replace(src: &Path, dst: &Path) -> Result<()> {

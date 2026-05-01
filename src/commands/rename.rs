@@ -21,22 +21,15 @@ pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &RenameA
     let to_acct = keychain::profile_account(&args.to);
 
     let blob = kc.read(&from_acct).ok();
-    let from_codex = paths.profile_codex_auth(&args.from);
-    let to_codex = paths.profile_codex_auth(&args.to);
-    let has_from_codex = from_codex.exists();
-    if blob.is_none() && !has_from_codex {
+    let from_dir = paths.profile_dir(&args.from);
+    let to_dir = paths.profile_dir(&args.to);
+    let dir_exists = from_dir.exists();
+    if blob.is_none() && !dir_exists {
         return Err(Error::ProfileNotFound(args.from.clone()));
     }
     if blob.is_some() && kc.read(&to_acct).is_ok() {
         return Err(Error::ProfileExists(args.to.clone()));
     }
-    if has_from_codex && to_codex.exists() {
-        return Err(Error::ProfileExists(args.to.clone()));
-    }
-
-    let from_dir = paths.profile_dir(&args.from);
-    let to_dir = paths.profile_dir(&args.to);
-    let dir_exists = from_dir.exists();
     if dir_exists && to_dir.exists() {
         return Err(Error::ProfileExists(args.to.clone()));
     }
@@ -50,12 +43,6 @@ pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &RenameA
             });
             plan.push(Action::KeychainDelete {
                 account: from_acct.clone(),
-            });
-        }
-        if has_from_codex && !dir_exists {
-            plan.push(Action::Move {
-                from: from_codex.clone(),
-                to: to_codex.clone(),
             });
         }
         if dir_exists {
@@ -84,13 +71,6 @@ pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &RenameA
             )));
         }
     }
-    if has_from_codex && !dir_exists {
-        if let Some(parent) = to_codex.parent() {
-            fs::create_dir_all(parent).map_err(|e| Error::io_at(parent, e))?;
-        }
-        fs::rename(&from_codex, &to_codex).map_err(|e| Error::io_at(&to_codex, e))?;
-    }
-
     if dir_exists {
         if let Some(parent) = to_dir.parent() {
             fs::create_dir_all(parent).map_err(|e| Error::io_at(parent, e))?;
@@ -108,12 +88,7 @@ pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &RenameA
             changed = true;
         }
     }
-    for slot in [
-        &mut state.active_claude,
-        &mut state.previous_claude,
-        &mut state.active_codex,
-        &mut state.previous_codex,
-    ] {
+    for slot in [&mut state.active_claude, &mut state.previous_claude] {
         if slot.as_deref() == Some(&args.from) {
             *slot = Some(args.to.clone());
             changed = true;
@@ -139,12 +114,6 @@ pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &RenameA
             account: to_acct,
             before_b64: None,
             after_b64: Some(crate::backup::b64(blob)),
-        });
-    }
-    if has_from_codex && !dir_exists {
-        manifest.push(BackupAction::FsMove {
-            from: from_codex.clone(),
-            to: to_codex.clone(),
         });
     }
     if dir_exists {

@@ -1,12 +1,14 @@
 use clap::{ArgAction, Args, Parser, Subcommand};
 
+use crate::provider::Provider;
+
 #[derive(Debug, Parser)]
 #[command(
     name = "cs",
     version,
-    about = "Claude Code account switcher",
-    long_about = "Sub-second Claude Code account switching with master-profile sharing of \
-                  skills/commands/agents/CLAUDE.md and a live usage dashboard.",
+    about = "Claude and Codex profile switcher",
+    long_about = "Sub-second Claude profile switching plus isolated Claude/Codex profile homes \
+                  with master-profile sharing of skills/commands/agents/CLAUDE.md and a live usage dashboard.",
     propagate_version = true,
     disable_help_subcommand = true
 )]
@@ -65,6 +67,10 @@ pub enum Command {
     DefaultGo,
     /// Force-refresh OAuth credentials for a profile.
     Refresh(OptionalNameArg),
+    /// Launch Claude or Codex in an isolated per-profile home.
+    Run(RunArgs),
+    /// Enter a shell with isolated per-profile homes exported.
+    Shell(ShellArgs),
     /// Install or repair the shell wrapper.
     Setup(SetupArgs),
     /// Create a shell alias for a profile.
@@ -82,9 +88,9 @@ pub enum Command {
     /// Launch the Ratatui usage TUI.
     Tui,
     /// Claude-specific profile operations.
-    Claude(ProviderArgs),
+    Claude(ClaudeArgs),
     /// Codex-specific profile operations.
-    Codex(ProviderArgs),
+    Codex(CodexArgs),
 
     /// Hidden: invoked by main.rs after rewriting `cs <name> [-- args...]`.
     #[command(name = "__switch", hide = true)]
@@ -98,13 +104,13 @@ pub enum Command {
 }
 
 #[derive(Debug, Args)]
-pub struct ProviderArgs {
+pub struct ClaudeArgs {
     #[command(subcommand)]
-    pub command: ProviderCommand,
+    pub command: ClaudeCommand,
 }
 
 #[derive(Debug, Subcommand)]
-pub enum ProviderCommand {
+pub enum ClaudeCommand {
     /// List saved profiles for this provider.
     List,
     /// Show active profile (or named profile) details for this provider.
@@ -113,8 +119,34 @@ pub enum ProviderCommand {
     Save(SaveArgs),
     /// Switch this provider to a profile.
     Switch(NameArg),
+    /// Launch this provider in an isolated per-profile home.
+    Run(ProviderRunArgs),
+    /// Enter a shell with this provider isolated to a profile.
+    Shell(ProviderShellArgs),
     /// Refresh credentials for this provider.
     Refresh(OptionalNameArg),
+}
+
+#[derive(Debug, Args)]
+pub struct CodexArgs {
+    #[command(subcommand)]
+    pub command: CodexCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum CodexCommand {
+    /// List initialized Codex profiles.
+    List,
+    /// Show Codex profile details.
+    Status(StatusArgs),
+    /// Create an isolated Codex home for a profile.
+    Init(NameArg),
+    /// Log into Codex inside a profile home.
+    Login(NameArg),
+    /// Launch Codex in an isolated per-profile home.
+    Run(ProviderRunArgs),
+    /// Enter a shell with Codex isolated to a profile.
+    Shell(ProviderShellArgs),
 }
 
 #[derive(Debug, Args)]
@@ -162,6 +194,39 @@ pub struct NameArg {
 #[derive(Debug, Args)]
 pub struct OptionalNameArg {
     pub name: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct RunArgs {
+    pub name: String,
+    pub provider: Provider,
+    /// Args to pass to the target CLI.
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    pub args: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct ProviderRunArgs {
+    pub name: String,
+    /// Args to pass to the target CLI.
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    pub args: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct ShellArgs {
+    pub name: String,
+    /// Print shell exports instead of spawning an interactive shell.
+    #[arg(long)]
+    pub print_env: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct ProviderShellArgs {
+    pub name: String,
+    /// Print shell exports instead of spawning an interactive shell.
+    #[arg(long)]
+    pub print_env: bool,
 }
 
 #[derive(Debug, Args)]
@@ -250,6 +315,8 @@ pub const KNOWN_SUBCOMMANDS: &[&str] = &[
     "default",
     "default-go",
     "refresh",
+    "run",
+    "shell",
     "setup",
     "alias",
     "migrate",
