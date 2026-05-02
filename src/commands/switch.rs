@@ -168,17 +168,6 @@ pub fn run(
     Ok(())
 }
 
-pub fn run_claude_only(
-    paths: &Paths,
-    kc: &dyn Keychain,
-    global: &GlobalOpts,
-    target_name: &str,
-    passthrough: &[String],
-) -> Result<()> {
-    read_target_claude(kc, target_name)?;
-    run(paths, kc, global, target_name, passthrough)
-}
-
 pub fn run_previous(
     paths: &Paths,
     kc: &dyn Keychain,

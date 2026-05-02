@@ -1,11 +1,8 @@
-//! Data models for usage tracking: ccusage integration, stats-cache parsing, and
-//! session tagging.
+//! Data models for usage tracking via the ccusage subprocess.
 
 use serde::{Deserialize, Serialize};
 
 pub mod ccusage;
-pub mod session_tags;
-pub mod stats_cache;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ActiveBlock {
@@ -19,6 +16,7 @@ pub struct ActiveBlock {
     pub cost_usd: f64,
     pub burn_rate_per_min: Option<f64>,
     pub projection_pct: Option<f64>,
+    pub remaining_minutes: Option<u64>,
     pub resets_at: Option<String>,
 }
 
@@ -33,14 +31,3 @@ pub struct DailyTotal {
     pub cost_usd: f64,
     pub models: Vec<String>,
 }
-
-#[derive(Debug, Clone, Serialize, Default)]
-pub struct DailyByProfile {
-    pub profile: String,
-    pub date: String,
-    pub messages: u64,
-    pub sessions: u64,
-    pub tool_calls: u64,
-}
-
-

@@ -16,10 +16,4 @@ claude() {
   __cs_source_env
   return $rc
 }
-codex() {
-  CS_SHELL_WRAPPER=1 command codex "$@"
-  local rc=$?
-  __cs_source_env
-  return $rc
-}
 "#;

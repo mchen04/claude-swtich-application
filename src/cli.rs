@@ -1,14 +1,13 @@
 use clap::{ArgAction, Args, Parser, Subcommand};
 
-use crate::provider::Provider;
-
 #[derive(Debug, Parser)]
 #[command(
     name = "cs",
     version,
-    about = "Claude and Codex profile switcher",
-    long_about = "Sub-second Claude profile switching plus isolated Claude/Codex profile homes \
-                  with master-profile sharing of skills/commands/agents/CLAUDE.md and a live usage dashboard.",
+    about = "Claude profile switcher",
+    long_about = "Sub-second Claude profile switching with isolated per-profile homes, \
+                  master-profile sharing of skills/commands/agents/CLAUDE.md, and a \
+                  multi-account usage dashboard showing 5-hour window status across every profile.",
     propagate_version = true,
     disable_help_subcommand = true
 )]
@@ -51,10 +50,8 @@ pub enum Command {
     List,
     /// Show active profile (or named profile) details.
     Status(StatusArgs),
-    /// Show usage for the current block / day / month.
+    /// Show per-profile 5-hour window status across every saved Claude profile.
     Usage(UsageArgs),
-    /// Print a one-shot dashboard snapshot.
-    Dashboard,
     /// Snapshot the current Claude Code Keychain entry into a named profile.
     Save(SaveArgs),
     /// Remove a saved profile.
@@ -67,9 +64,9 @@ pub enum Command {
     DefaultGo,
     /// Force-refresh OAuth credentials for a profile.
     Refresh(OptionalNameArg),
-    /// Launch Claude or Codex in an isolated per-profile home.
+    /// Launch claude in an isolated per-profile home.
     Run(RunArgs),
-    /// Enter a shell with isolated per-profile homes exported.
+    /// Enter a shell with the per-profile claude home exported.
     Shell(ShellArgs),
     /// Install or repair the shell wrapper.
     Setup(SetupArgs),
@@ -85,10 +82,6 @@ pub enum Command {
     Links,
     /// Remove cs from the system (symlinks, wrapper, optionally master).
     Uninstall(UninstallArgs),
-    /// Claude-specific profile operations.
-    Claude(ClaudeArgs),
-    /// Codex-specific profile operations.
-    Codex(CodexArgs),
 
     /// Hidden: invoked by main.rs after rewriting `cs <name> [-- args...]`.
     #[command(name = "__switch", hide = true)]
@@ -99,52 +92,6 @@ pub enum Command {
     /// Hidden helper used by the shell wrapper.
     #[command(name = "__wrapper-emit-env", hide = true)]
     WrapperEmitEnv(NameArg),
-}
-
-#[derive(Debug, Args)]
-pub struct ClaudeArgs {
-    #[command(subcommand)]
-    pub command: ClaudeCommand,
-}
-
-#[derive(Debug, Subcommand)]
-pub enum ClaudeCommand {
-    /// List saved profiles for this provider.
-    List,
-    /// Show active profile (or named profile) details for this provider.
-    Status(StatusArgs),
-    /// Snapshot current credentials into a named profile for this provider.
-    Save(SaveArgs),
-    /// Switch this provider to a profile.
-    Switch(NameArg),
-    /// Launch this provider in an isolated per-profile home.
-    Run(ProviderRunArgs),
-    /// Enter a shell with this provider isolated to a profile.
-    Shell(ProviderShellArgs),
-    /// Refresh credentials for this provider.
-    Refresh(OptionalNameArg),
-}
-
-#[derive(Debug, Args)]
-pub struct CodexArgs {
-    #[command(subcommand)]
-    pub command: CodexCommand,
-}
-
-#[derive(Debug, Subcommand)]
-pub enum CodexCommand {
-    /// List initialized Codex profiles.
-    List,
-    /// Show Codex profile details.
-    Status(StatusArgs),
-    /// Create an isolated Codex home for a profile.
-    Init(NameArg),
-    /// Log into Codex inside a profile home.
-    Login(NameArg),
-    /// Launch Codex in an isolated per-profile home.
-    Run(ProviderRunArgs),
-    /// Enter a shell with Codex isolated to a profile.
-    Shell(ProviderShellArgs),
 }
 
 #[derive(Debug, Args)]
@@ -160,20 +107,20 @@ pub struct StatusArgs {
     pub name: Option<String>,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Args, Default)]
 pub struct UsageArgs {
-    /// Update the display continuously.
+    /// Update the display continuously (~1s cadence).
     #[arg(long)]
     pub watch: bool,
-    /// Show 5-hour blocks (default if no other flag).
-    #[arg(long, conflicts_with_all = ["daily", "monthly"])]
-    pub blocks: bool,
-    /// Show daily totals.
-    #[arg(long, conflicts_with_all = ["blocks", "monthly"])]
+    /// Replace the WEEKLY USED column with TODAY (today's tokens only).
+    #[arg(long, conflicts_with = "monthly")]
     pub daily: bool,
-    /// Show monthly totals.
-    #[arg(long, conflicts_with_all = ["blocks", "daily"])]
+    /// Replace the WEEKLY USED column with 30D (sum of last 30 days).
+    #[arg(long, conflicts_with = "daily")]
     pub monthly: bool,
+    /// Add `5H $` and `WEEKLY $` cost columns.
+    #[arg(long)]
+    pub price: bool,
 }
 
 #[derive(Debug, Args)]
@@ -197,30 +144,13 @@ pub struct OptionalNameArg {
 #[derive(Debug, Args)]
 pub struct RunArgs {
     pub name: String,
-    pub provider: Provider,
-    /// Args to pass to the target CLI.
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-    pub args: Vec<String>,
-}
-
-#[derive(Debug, Args)]
-pub struct ProviderRunArgs {
-    pub name: String,
-    /// Args to pass to the target CLI.
+    /// Args to pass to `claude` after switching.
     #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub args: Vec<String>,
 }
 
 #[derive(Debug, Args)]
 pub struct ShellArgs {
-    pub name: String,
-    /// Print shell exports instead of spawning an interactive shell.
-    #[arg(long)]
-    pub print_env: bool,
-}
-
-#[derive(Debug, Args)]
-pub struct ProviderShellArgs {
     pub name: String,
     /// Print shell exports instead of spawning an interactive shell.
     #[arg(long)]
@@ -306,7 +236,6 @@ pub const KNOWN_SUBCOMMANDS: &[&str] = &[
     "list",
     "status",
     "usage",
-    "dashboard",
     "save",
     "rm",
     "rename",
@@ -322,8 +251,6 @@ pub const KNOWN_SUBCOMMANDS: &[&str] = &[
     "link",
     "links",
     "uninstall",
-    "claude",
-    "codex",
     "help",
     "__switch",
     "__switch-previous",

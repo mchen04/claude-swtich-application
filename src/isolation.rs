@@ -5,7 +5,6 @@ use crate::error::{Error, Result};
 use crate::keychain::{self, Keychain};
 use crate::paths::{Paths, SHARED_ITEMS};
 use crate::profile::OauthCreds;
-use crate::provider::Provider;
 use crate::symlinks;
 
 #[derive(Debug, Clone)]
@@ -25,130 +24,59 @@ impl LaunchSpec {
     }
 }
 
-pub fn build_provider_launch(
+pub fn build_claude_launch(
     paths: &Paths,
     kc: &dyn Keychain,
-    provider: Provider,
     name: &str,
     args: Vec<String>,
 ) -> Result<LaunchSpec> {
-    let env = env_for_provider(paths, kc, provider, name)?;
-    Ok(LaunchSpec::new(provider.as_str(), args, env))
+    let env = env_for_claude(paths, kc, name)?;
+    Ok(LaunchSpec::new("claude", args, env))
 }
 
-pub fn env_for_provider(
+pub fn env_for_claude(
     paths: &Paths,
     kc: &dyn Keychain,
-    provider: Provider,
     name: &str,
 ) -> Result<Vec<(String, String)>> {
-    let home = materialize_provider_home(paths, kc, provider, name)?;
-    Ok(env_for_provider_home(provider, &home))
+    let home = materialize_claude_home(paths, kc, name)?;
+    Ok(claude_env(&home))
 }
 
-pub fn preview_env_for_provider(
+pub fn preview_env_for_claude(
     paths: &Paths,
     kc: &dyn Keychain,
-    provider: Provider,
     name: &str,
 ) -> Result<Vec<(String, String)>> {
-    if !has_provider(paths, kc, provider, name)? {
+    if !has_claude(kc, name)? {
         return Err(Error::ProfileNotFound(name.to_string()));
     }
-    let home = provider_home_path(paths, provider, name);
-    Ok(env_for_provider_home(provider, &home))
+    let home = paths.profile_provider_home(name, "claude");
+    Ok(claude_env(&home))
 }
 
-pub fn preview_env_for_shell(
-    paths: &Paths,
-    kc: &dyn Keychain,
-    name: &str,
-) -> Result<Vec<(String, String)>> {
-    let mut env = Vec::new();
-    if has_provider(paths, kc, Provider::Claude, name)? {
-        env.extend(preview_env_for_provider(paths, kc, Provider::Claude, name)?);
-    }
-    if has_provider(paths, kc, Provider::Codex, name)? {
-        env.extend(preview_env_for_provider(paths, kc, Provider::Codex, name)?);
-    }
-    if env.is_empty() {
-        return Err(Error::ProfileNotFound(name.to_string()));
-    }
-    Ok(env)
-}
-
-fn env_for_provider_home(provider: Provider, home: &Path) -> Vec<(String, String)> {
-    match provider {
-        Provider::Claude => vec![
-            (
-                "CLAUDE_CONFIG_DIR".to_string(),
-                home.to_string_lossy().into_owned(),
-            ),
-            (
-                "CLAUDE_HOME".to_string(),
-                home.to_string_lossy().into_owned(),
-            ),
-        ],
-        Provider::Codex => vec![(
-            "CODEX_HOME".to_string(),
+fn claude_env(home: &Path) -> Vec<(String, String)> {
+    vec![
+        (
+            "CLAUDE_CONFIG_DIR".to_string(),
             home.to_string_lossy().into_owned(),
-        )],
-    }
+        ),
+        (
+            "CLAUDE_HOME".to_string(),
+            home.to_string_lossy().into_owned(),
+        ),
+    ]
 }
 
-pub fn env_for_shell(
-    paths: &Paths,
-    kc: &dyn Keychain,
-    name: &str,
-) -> Result<Vec<(String, String)>> {
-    let mut env = Vec::new();
-    if has_provider(paths, kc, Provider::Claude, name)? {
-        env.extend(env_for_provider(paths, kc, Provider::Claude, name)?);
-    }
-    if has_provider(paths, kc, Provider::Codex, name)? {
-        env.extend(env_for_provider(paths, kc, Provider::Codex, name)?);
-    }
-    if env.is_empty() {
-        return Err(Error::ProfileNotFound(name.to_string()));
-    }
-    Ok(env)
-}
-
-pub fn has_provider(
-    paths: &Paths,
-    kc: &dyn Keychain,
-    provider: Provider,
-    name: &str,
-) -> Result<bool> {
-    Ok(match provider {
-        Provider::Claude => {
-            let account = keychain::profile_account(name);
-            match kc.read(&account) {
-                Ok(bytes) => {
-                    OauthCreds::parse(&bytes)?;
-                    true
-                }
-                Err(_) => false,
-            }
+pub fn has_claude(kc: &dyn Keychain, name: &str) -> Result<bool> {
+    let account = keychain::profile_account(name);
+    Ok(match kc.read(&account) {
+        Ok(bytes) => {
+            OauthCreds::parse(&bytes)?;
+            true
         }
-        Provider::Codex => provider_home_path(paths, Provider::Codex, name).exists(),
+        Err(_) => false,
     })
-}
-
-fn materialize_provider_home(
-    paths: &Paths,
-    kc: &dyn Keychain,
-    provider: Provider,
-    name: &str,
-) -> Result<PathBuf> {
-    match provider {
-        Provider::Claude => materialize_claude_home(paths, kc, name),
-        Provider::Codex => ensure_codex_home(paths, name),
-    }
-}
-
-fn provider_home_path(paths: &Paths, provider: Provider, name: &str) -> PathBuf {
-    paths.profile_provider_home(name, provider.as_str())
 }
 
 fn materialize_claude_home(paths: &Paths, kc: &dyn Keychain, name: &str) -> Result<PathBuf> {
@@ -173,22 +101,6 @@ fn materialize_claude_home(paths: &Paths, kc: &dyn Keychain, name: &str) -> Resu
         if fs::symlink_metadata(&source).is_ok() {
             ensure_symlink(&source, &home.join(item))?;
         }
-    }
-
-    Ok(home)
-}
-
-pub fn ensure_codex_home(paths: &Paths, name: &str) -> Result<PathBuf> {
-    let home = paths.profile_provider_home(name, "codex");
-    fs::create_dir_all(&home).map_err(|e| Error::io_at(&home, e))?;
-
-    if !paths.profile_codex_config(name).exists() && paths.codex_config().exists() {
-        copy_into_home(&paths.codex_config(), &home.join("config.toml"))?;
-    }
-
-    let shared_skills = paths.codex_skills_dir();
-    if fs::symlink_metadata(&shared_skills).is_ok() {
-        ensure_symlink(&shared_skills, &home.join("skills"))?;
     }
 
     Ok(home)

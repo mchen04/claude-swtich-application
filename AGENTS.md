@@ -1,6 +1,7 @@
 # cs — Agent Guide
 
-Claude Code account switcher with master-profile sharing and live usage TUI.
+Claude Code account switcher with master-profile sharing and a multi-account
+usage dashboard.
 
 ## Build
 
@@ -34,10 +35,12 @@ All filesystem and keychain access is injectable:
 
 - `CLAUDE_HOME` — canonical Claude Code home (default `~/.claude`)
 - `CS_HOME` — cs state directory (default `~/.claude-cs`)
-- `CODEX_HOME` — Codex home (default `~/.codex`)
 - `CS_TEST_KEYCHAIN=1` — swap the macOS keychain backend for an in-memory JSON mock
 - `CS_TEST_KEYCHAIN_FIXTURE=/path/to.json` — seed the mock with `{account: blob}` entries
 - `CS_TEST_DISABLE_CCUSAGE=1` — force ccusage subprocesses to fail (for fallback testing)
+- `CS_TEST_CCUSAGE_FIXTURE=/dir` — read ccusage output from
+  `<dir>/<profile>-blocks.json` and `<dir>/<profile>-daily.json` (falls back to
+  `<dir>/<mode>.json`)
 
 ## Key Design Decisions
 
@@ -45,9 +48,11 @@ All filesystem and keychain access is injectable:
   `Claude Code-credentials-<profile>` account naming as the legacy `claude-switch` bash tool.
 - **Master profile** — one designated profile owns `skills/`, `commands/`, `agents/`, and
   `CLAUDE.md`; every other profile inherits them via symlinks in `~/.claude/`.
-- **Provider isolation** — `cs run <profile> <provider>` materializes a per-profile home
-  under `~/.claude-cs/profiles/<name>/providers/<provider>/home/` and exports the
-  appropriate env vars (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, etc.).
+- **Per-profile isolation** — `cs run <profile>` materializes an isolated home
+  under `~/.claude-cs/profiles/<name>/providers/claude/home/` and exports
+  `CLAUDE_CONFIG_DIR` + `CLAUDE_HOME` so claude reads only that profile's
+  `projects/` jsonl. The same per-home seam powers per-profile ccusage in
+  `cs usage`.
 - **Atomic writes** — all file mutations go through `jsonio::atomic_write_bytes` (tempfile +
   `rename(2)`) to avoid torn writes.
 - **Rollback manifests** — every destructive op writes

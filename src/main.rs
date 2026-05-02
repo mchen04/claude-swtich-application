@@ -6,7 +6,6 @@
 mod backup;
 mod cli;
 mod commands;
-mod dashboard;
 mod doctor;
 mod dryrun;
 mod error;
@@ -20,7 +19,6 @@ mod master;
 mod output;
 mod paths;
 mod profile;
-mod provider;
 mod shell;
 mod state;
 mod symlinks;
@@ -28,7 +26,7 @@ mod usage;
 
 use clap::Parser;
 
-use crate::cli::{Cli, Command, KNOWN_SUBCOMMANDS};
+use crate::cli::{Cli, Command, UsageArgs, KNOWN_SUBCOMMANDS};
 use crate::error::Result;
 use crate::keychain::Keychain;
 use crate::paths::Paths;
@@ -59,20 +57,19 @@ fn run_with_args(args: Vec<String>) {
 
 fn dispatch(paths: &Paths, kc: &dyn Keychain, cli: &Cli) -> Result<()> {
     match &cli.command {
-        None => commands::dashboard::run(paths, kc, &cli.global),
+        None => commands::usage::run(paths, kc, &cli.global, &UsageArgs::default()),
         Some(Command::Doctor(a)) => commands::doctor::run(paths, kc, &cli.global, a),
         Some(Command::List) => commands::list::run(paths, kc, &cli.global),
         Some(Command::Status(a)) => commands::status::run(paths, kc, &cli.global, a),
-        Some(Command::Usage(a)) => commands::usage::run(paths, &cli.global, a),
-        Some(Command::Dashboard) => commands::dashboard::run(paths, kc, &cli.global),
+        Some(Command::Usage(a)) => commands::usage::run(paths, kc, &cli.global, a),
         Some(Command::Save(a)) => commands::save::run(paths, kc, &cli.global, a),
         Some(Command::Rm(a)) => commands::rm::run(paths, kc, &cli.global, a),
         Some(Command::Rename(a)) => commands::rename::run(paths, kc, &cli.global, a),
         Some(Command::Default(a)) => commands::default::set(paths, kc, &cli.global, a),
         Some(Command::DefaultGo) => commands::default::go(paths, kc, &cli.global),
         Some(Command::Refresh(a)) => commands::refresh::run(paths, kc, &cli.global, a),
-        Some(Command::Run(a)) => commands::launch::run_generic(paths, kc, &cli.global, a),
-        Some(Command::Shell(a)) => commands::launch::shell_generic(paths, kc, &cli.global, a),
+        Some(Command::Run(a)) => commands::launch::run_run(paths, kc, &cli.global, a),
+        Some(Command::Shell(a)) => commands::launch::run_shell(paths, kc, &cli.global, a),
         Some(Command::Setup(a)) => commands::setup::run(paths, &cli.global, a),
         Some(Command::Alias(a)) => commands::alias::run(paths, &cli.global, a),
         Some(Command::Migrate(a)) => commands::migrate::run(paths, kc, &cli.global, a),
@@ -80,8 +77,6 @@ fn dispatch(paths: &Paths, kc: &dyn Keychain, cli: &Cli) -> Result<()> {
         Some(Command::Link(a)) => commands::link::link(paths, &cli.global, a),
         Some(Command::Links) => commands::link::list(paths, &cli.global),
         Some(Command::Uninstall(a)) => commands::uninstall::run(paths, &cli.global, a),
-        Some(Command::Claude(a)) => commands::provider::run_claude(paths, kc, &cli.global, a),
-        Some(Command::Codex(a)) => commands::provider::run_codex(paths, kc, &cli.global, a),
         Some(Command::Switch(a)) => {
             commands::switch::run(paths, kc, &cli.global, &a.name, &a.passthrough)
         }

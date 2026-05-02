@@ -22,12 +22,9 @@ pub struct DoctorReport {
 #[derive(Debug, Serialize)]
 pub struct PathReport {
     pub claude_home: PathInfo,
-    pub codex_home: PathInfo,
     pub cs_home: PathInfo,
     pub config_file: PathInfo,
-    pub stats_cache: PathInfo,
     pub projects_dir: PathInfo,
-    pub codex_auth: PathInfo,
     pub state_file: PathInfo,
 }
 
@@ -77,18 +74,14 @@ pub struct KeychainReport {
 pub fn run(paths: &Paths, kc: &dyn Keychain) -> Result<DoctorReport> {
     let path_report = PathReport {
         claude_home: PathInfo::probe(paths.claude_home.clone()),
-        codex_home: PathInfo::probe(paths.codex_home.clone()),
         cs_home: PathInfo::probe(paths.cs_home.clone()),
         config_file: PathInfo::probe(paths.config_file.clone()),
-        stats_cache: PathInfo::probe(paths.stats_cache()),
         projects_dir: PathInfo::probe(paths.projects_dir()),
-        codex_auth: PathInfo::probe(paths.codex_auth()),
         state_file: PathInfo::probe(paths.state_file()),
     };
 
     let tooling = vec![
         check_tool("claude", &["--version"]),
-        check_tool("codex", &["--version"]),
         check_tool("node", &["--version"]),
         check_tool("npx", &["--version"]),
         check_tool("bun", &["--version"]),
@@ -238,12 +231,9 @@ impl fmt::Display for DoctorReport {
         writeln!(f)?;
         writeln!(f, "Paths")?;
         writeln!(f, "  CLAUDE_HOME : {}", fmt_path(&self.paths.claude_home))?;
-        writeln!(f, "  CODEX_HOME  : {}", fmt_path(&self.paths.codex_home))?;
         writeln!(f, "  CS_HOME     : {}", fmt_path(&self.paths.cs_home))?;
         writeln!(f, "  config      : {}", fmt_path(&self.paths.config_file))?;
-        writeln!(f, "  stats-cache : {}", fmt_path(&self.paths.stats_cache))?;
         writeln!(f, "  projects/   : {}", fmt_path(&self.paths.projects_dir))?;
-        writeln!(f, "  codex auth  : {}", fmt_path(&self.paths.codex_auth))?;
         writeln!(f, "  state.json  : {}", fmt_path(&self.paths.state_file))?;
         writeln!(f)?;
         writeln!(f, "Tooling")?;

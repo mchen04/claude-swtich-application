@@ -4,100 +4,57 @@ use std::process::Command;
 
 use serde::Serialize;
 
-use crate::cli::{GlobalOpts, ProviderRunArgs, ProviderShellArgs, RunArgs, ShellArgs};
+use crate::cli::{GlobalOpts, RunArgs, ShellArgs};
 use crate::dryrun::{Action, Plan};
 use crate::error::{Error, Result};
 use crate::isolation::{self, LaunchSpec};
 use crate::keychain::Keychain;
 use crate::output::{emit, emit_json, emit_text, OutputOpts};
 use crate::paths::Paths;
-use crate::provider::Provider;
 
-pub fn run_generic(
+pub fn run_run(
     paths: &Paths,
     kc: &dyn Keychain,
     global: &GlobalOpts,
     args: &RunArgs,
 ) -> Result<()> {
-    run_provider(paths, kc, global, args.provider, &args.name, &args.args)
-}
-
-pub fn run_provider(
-    paths: &Paths,
-    kc: &dyn Keychain,
-    global: &GlobalOpts,
-    provider: Provider,
-    name: &str,
-    args: &[String],
-) -> Result<()> {
     if global.dry_run {
-        let env = isolation::preview_env_for_provider(paths, kc, provider, name)?;
+        let env = isolation::preview_env_for_claude(paths, kc, &args.name)?;
         let mut plan = Plan::new();
         push_env_notes(&mut plan, &env);
         plan.push(Action::SpawnProcess {
-            cmd: provider.as_str().to_string(),
-            args: args.to_vec(),
+            cmd: "claude".into(),
+            args: args.args.clone(),
         });
-        let opts = OutputOpts {
-            json: global.json,
-        };
-        return emit(opts, &plan);
+        return emit(
+            OutputOpts {
+                json: global.json,
+            },
+            &plan,
+        );
     }
-    let spec = isolation::build_provider_launch(paths, kc, provider, name, args.to_vec())?;
+    let spec = isolation::build_claude_launch(paths, kc, &args.name, args.args.clone())?;
     exec_spec(spec)
 }
 
-pub fn run_provider_args(
-    paths: &Paths,
-    kc: &dyn Keychain,
-    global: &GlobalOpts,
-    provider: Provider,
-    args: &ProviderRunArgs,
-) -> Result<()> {
-    run_provider(paths, kc, global, provider, &args.name, &args.args)
-}
-
-pub fn shell_generic(
+pub fn run_shell(
     paths: &Paths,
     kc: &dyn Keychain,
     global: &GlobalOpts,
     args: &ShellArgs,
 ) -> Result<()> {
     let env = if args.print_env || global.dry_run {
-        isolation::preview_env_for_shell(paths, kc, &args.name)?
+        isolation::preview_env_for_claude(paths, kc, &args.name)?
     } else {
-        isolation::env_for_shell(paths, kc, &args.name)?
+        isolation::env_for_claude(paths, kc, &args.name)?
     };
-    shell_with_env(global, env, args.print_env)
-}
 
-pub fn shell_provider(
-    paths: &Paths,
-    kc: &dyn Keychain,
-    global: &GlobalOpts,
-    provider: Provider,
-    args: &ProviderShellArgs,
-) -> Result<()> {
-    let env = if args.print_env || global.dry_run {
-        isolation::preview_env_for_provider(paths, kc, provider, &args.name)?
-    } else {
-        isolation::env_for_provider(paths, kc, provider, &args.name)?
-    };
-    shell_with_env(global, env, args.print_env)
-}
-
-fn shell_with_env(global: &GlobalOpts, env: Vec<(String, String)>, print_env: bool) -> Result<()> {
-    if print_env {
+    if args.print_env {
         let report = ShellEnvReport { exports: env };
         if global.json {
             return emit_json(&report);
         }
-        return emit_text(
-            OutputOpts {
-                json: false,
-            },
-            &report,
-        );
+        return emit_text(OutputOpts { json: false }, &report);
     }
 
     if global.dry_run {
@@ -105,13 +62,15 @@ fn shell_with_env(global: &GlobalOpts, env: Vec<(String, String)>, print_env: bo
         push_env_notes(&mut plan, &env);
         let shell = detect_shell()?;
         plan.push(Action::SpawnProcess {
-            cmd: shell.clone(),
+            cmd: shell,
             args: vec!["-i".to_string()],
         });
-        let opts = OutputOpts {
-            json: global.json,
-        };
-        return emit(opts, &plan);
+        return emit(
+            OutputOpts {
+                json: global.json,
+            },
+            &plan,
+        );
     }
 
     let shell = detect_shell()?;

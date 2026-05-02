@@ -28,9 +28,7 @@ pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &StatusA
     if global.json {
         emit_json(&report)?;
     } else {
-        let opts = OutputOpts {
-            json: false,
-        };
+        let opts = OutputOpts { json: false };
         emit(opts, &report)?;
     }
     Ok(())
@@ -43,7 +41,7 @@ pub fn build(paths: &Paths, kc: &dyn Keychain, requested: Option<&str>) -> Resul
         .or_else(|| state.active.clone());
 
     let active_summary = match &target {
-        Some(name) => Some(load_summary(paths, kc, &state, name)?),
+        Some(name) => Some(load_summary(kc, &state, name)?),
         None => None,
     };
 
@@ -55,30 +53,14 @@ pub fn build(paths: &Paths, kc: &dyn Keychain, requested: Option<&str>) -> Resul
     })
 }
 
-fn load_summary(
-    paths: &Paths,
-    kc: &dyn Keychain,
-    state: &State,
-    name: &str,
-) -> Result<ProfileSummary> {
+fn load_summary(kc: &dyn Keychain, state: &State, name: &str) -> Result<ProfileSummary> {
     let account = keychain::profile_account(name);
     let mut summary = match kc.read(&account) {
         Ok(bytes) => {
             let creds = OauthCreds::parse(&bytes)?;
             ProfileSummary::from_creds(name, &creds)
         }
-        Err(_) => {
-            if paths
-                .profile_provider_home(name, crate::provider::Provider::Codex.as_str())
-                .exists()
-            {
-                let mut s = ProfileSummary::unknown(name);
-                s.providers.push("codex".to_string());
-                s
-            } else {
-                return Err(Error::ProfileNotFound(name.to_string()));
-            }
-        }
+        Err(_) => return Err(Error::ProfileNotFound(name.to_string())),
     };
     if state.active.as_deref() == Some(name) {
         summary.is_active = true;
@@ -106,9 +88,6 @@ impl fmt::Display for StatusReport {
                 }
                 if let Some(plan) = &p.plan {
                     writeln!(f, "  plan    : {plan}")?;
-                }
-                if !p.providers.is_empty() {
-                    writeln!(f, "  providers: {}", p.providers.join(","))?;
                 }
                 if let Some(secs) = p.expires_in_secs {
                     writeln!(

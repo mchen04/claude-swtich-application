@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -11,11 +13,12 @@ use super::{ActiveBlock, DailyTotal};
 const BLOCKS_TTL: Duration = Duration::from_secs(5);
 const DAILY_TTL: Duration = Duration::from_secs(30);
 
-/// Subprocess-backed wrapper for `ccusage`. Prefers `bunx ccusage` (faster start); falls
-/// back to `npx ccusage`. Single-flight via the per-cache mutex.
+/// Subprocess-backed wrapper for `ccusage`. Prefers `bunx ccusage` (faster start);
+/// falls back to `npx ccusage`. Cached per Claude home so each profile reads its
+/// own `projects/` jsonl.
 pub struct CcusageClient {
-    blocks: Mutex<Cache<Vec<ActiveBlock>>>,
-    daily: Mutex<Cache<Vec<DailyTotal>>>,
+    blocks: Mutex<HashMap<PathBuf, Cache<Vec<ActiveBlock>>>>,
+    daily: Mutex<HashMap<PathBuf, Cache<Vec<DailyTotal>>>>,
 }
 
 #[derive(Default)]
@@ -33,53 +36,61 @@ impl Default for CcusageClient {
 impl CcusageClient {
     pub fn new() -> Self {
         Self {
-            blocks: Mutex::new(Cache {
-                value: None,
-                fetched_at: None,
-            }),
-            daily: Mutex::new(Cache {
-                value: None,
-                fetched_at: None,
-            }),
+            blocks: Mutex::new(HashMap::new()),
+            daily: Mutex::new(HashMap::new()),
         }
     }
 
-    pub fn active_blocks(&self) -> Result<Vec<ActiveBlock>> {
+    pub fn active_blocks_for(&self, home: &Path) -> Result<Vec<ActiveBlock>> {
         {
-            let cache = self.blocks.lock().unwrap();
-            if let (Some(v), Some(t)) = (cache.value.as_ref(), cache.fetched_at) {
-                if t.elapsed() < BLOCKS_TTL {
-                    return Ok(v.clone());
+            let map = self.blocks.lock().unwrap();
+            if let Some(c) = map.get(home) {
+                if let (Some(v), Some(t)) = (c.value.as_ref(), c.fetched_at) {
+                    if t.elapsed() < BLOCKS_TTL {
+                        return Ok(v.clone());
+                    }
                 }
             }
         }
-        let raw = run_ccusage(&["blocks", "--json", "--active"])?;
+        let raw = run_ccusage(&["blocks", "--json", "--active"], Some(home))?;
         let parsed = parse_blocks(&raw)?;
-        let mut cache = self.blocks.lock().unwrap();
-        cache.value = Some(parsed.clone());
-        cache.fetched_at = Some(Instant::now());
+        let mut map = self.blocks.lock().unwrap();
+        map.insert(
+            home.to_path_buf(),
+            Cache {
+                value: Some(parsed.clone()),
+                fetched_at: Some(Instant::now()),
+            },
+        );
         Ok(parsed)
     }
 
-    pub fn daily(&self) -> Result<Vec<DailyTotal>> {
+    pub fn daily_for(&self, home: &Path) -> Result<Vec<DailyTotal>> {
         {
-            let cache = self.daily.lock().unwrap();
-            if let (Some(v), Some(t)) = (cache.value.as_ref(), cache.fetched_at) {
-                if t.elapsed() < DAILY_TTL {
-                    return Ok(v.clone());
+            let map = self.daily.lock().unwrap();
+            if let Some(c) = map.get(home) {
+                if let (Some(v), Some(t)) = (c.value.as_ref(), c.fetched_at) {
+                    if t.elapsed() < DAILY_TTL {
+                        return Ok(v.clone());
+                    }
                 }
             }
         }
-        let raw = run_ccusage(&["daily", "--json"])?;
+        let raw = run_ccusage(&["daily", "--json"], Some(home))?;
         let parsed = parse_daily(&raw)?;
-        let mut cache = self.daily.lock().unwrap();
-        cache.value = Some(parsed.clone());
-        cache.fetched_at = Some(Instant::now());
+        let mut map = self.daily.lock().unwrap();
+        map.insert(
+            home.to_path_buf(),
+            Cache {
+                value: Some(parsed.clone()),
+                fetched_at: Some(Instant::now()),
+            },
+        );
         Ok(parsed)
     }
 }
 
-fn run_ccusage(extra_args: &[&str]) -> Result<Vec<u8>> {
+fn run_ccusage(extra_args: &[&str], home: Option<&Path>) -> Result<Vec<u8>> {
     if std::env::var_os("CS_TEST_DISABLE_CCUSAGE").is_some() {
         return Err(Error::Subprocess {
             cmd: "ccusage".into(),
@@ -87,18 +98,30 @@ fn run_ccusage(extra_args: &[&str]) -> Result<Vec<u8>> {
         });
     }
     if let Some(fixture) = std::env::var_os("CS_TEST_CCUSAGE_FIXTURE") {
-        // Test injection: read the JSON shape from disk based on the first arg
-        // (`blocks` or `daily`).
+        // Test injection: read JSON from disk. With a per-home call, prefer
+        // `<fixture>/<profile>-<mode>.json` and fall back to `<fixture>/<mode>.json`.
         let mode = extra_args.first().copied().unwrap_or("");
-        let path = std::path::Path::new(&fixture).join(format!("{mode}.json"));
-        return std::fs::read(&path).map_err(|e| Error::io_at(&path, e));
+        let dir = std::path::Path::new(&fixture);
+        if let Some(name) = home.and_then(profile_name_from_home) {
+            let p = dir.join(format!("{name}-{mode}.json"));
+            if p.exists() {
+                return std::fs::read(&p).map_err(|e| Error::io_at(&p, e));
+            }
+        }
+        let p = dir.join(format!("{mode}.json"));
+        return std::fs::read(&p).map_err(|e| Error::io_at(&p, e));
     }
     let runners: &[(&str, &[&str])] = &[("bunx", &["ccusage"]), ("npx", &["--yes", "ccusage"])];
     let mut last_err: Option<String> = None;
     for (cmd, prefix) in runners {
         let mut args: Vec<&str> = prefix.to_vec();
         args.extend_from_slice(extra_args);
-        let out = Command::new(cmd).args(&args).output();
+        let mut command = Command::new(cmd);
+        command.args(&args);
+        if let Some(home) = home {
+            command.env("CLAUDE_CONFIG_DIR", home);
+        }
+        let out = command.output();
         match out {
             Ok(o) if o.status.success() => return Ok(o.stdout),
             Ok(o) => {
@@ -115,6 +138,16 @@ fn run_ccusage(extra_args: &[&str]) -> Result<Vec<u8>> {
         cmd: "ccusage".into(),
         message: last_err.unwrap_or_else(|| "no runner available".into()),
     })
+}
+
+fn profile_name_from_home(home: &Path) -> Option<String> {
+    // Layout: <cs_home>/profiles/<name>/providers/claude/home
+    let mut iter = home.iter().rev();
+    iter.next()?; // home
+    iter.next()?; // claude
+    iter.next()?; // providers
+    let name = iter.next()?;
+    Some(name.to_string_lossy().into_owned())
 }
 
 #[derive(Debug, Deserialize)]
@@ -139,10 +172,8 @@ struct RawBlock {
     total_tokens: Option<u64>,
     #[serde(default, rename = "costUSD")]
     cost_usd: Option<f64>,
-    /// ccusage 18.x: object with `tokensPerMinute`, `costPerHour`, etc.
     #[serde(default, rename = "burnRate")]
     burn_rate: Option<RawBurnRate>,
-    /// ccusage 18.x: object with `totalTokens`, `totalCost`, `remainingMinutes`.
     #[serde(default)]
     projection: Option<RawProjection>,
     #[serde(default, rename = "resetTime")]
@@ -150,7 +181,7 @@ struct RawBlock {
 }
 
 #[derive(Debug, Deserialize, Default)]
-#[allow(dead_code)] // structural fields kept for forward-compat / future TUI panes
+#[allow(dead_code)]
 struct RawBurnRate {
     #[serde(default, rename = "tokensPerMinute")]
     tokens_per_minute: f64,
@@ -189,6 +220,19 @@ fn parse_blocks(bytes: &[u8]) -> Result<Vec<ActiveBlock>> {
         .filter(|b| b.is_active.unwrap_or(true))
         .map(|b| {
             let counts = b.token_counts.unwrap_or_default();
+            let projection_pct = b.projection.as_ref().and_then(|p| {
+                let total = (counts.input_tokens
+                    + counts.output_tokens
+                    + counts.cache_creation_input_tokens
+                    + counts.cache_read_input_tokens) as f64;
+                if p.total_tokens > 0 {
+                    Some(total / p.total_tokens as f64)
+                } else {
+                    None
+                }
+            });
+            let remaining_minutes = b.projection.as_ref().map(|p| p.remaining_minutes);
+            let _ = b.total_tokens;
             ActiveBlock {
                 block_id: b.id,
                 start: b.start_time,
@@ -199,30 +243,12 @@ fn parse_blocks(bytes: &[u8]) -> Result<Vec<ActiveBlock>> {
                 cache_read_tokens: counts.cache_read_input_tokens,
                 cost_usd: b.cost_usd.unwrap_or(0.0),
                 burn_rate_per_min: b.burn_rate.as_ref().map(|r| r.tokens_per_minute),
-                projection_pct: b.projection.as_ref().and_then(|p| {
-                    let total = (counts.input_tokens
-                        + counts.output_tokens
-                        + counts.cache_creation_input_tokens
-                        + counts.cache_read_input_tokens) as f64;
-                    if p.total_tokens > 0 {
-                        Some(total / p.total_tokens as f64)
-                    } else {
-                        None
-                    }
-                }),
+                projection_pct,
+                remaining_minutes,
                 resets_at: b.reset_time,
             }
-            .with_total(b.total_tokens)
         })
         .collect())
-}
-
-impl ActiveBlock {
-    fn with_total(self, _: Option<u64>) -> Self {
-        // Total tokens is derivable from the components; ccusage's `totalTokens` is
-        // sometimes absent. Keep the explicit field for forward-compatibility.
-        self
-    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -316,8 +342,8 @@ mod tests {
         assert_eq!(v[0].cache_read_tokens, 800);
         assert!((v[0].cost_usd - 0.123).abs() < 1e-9);
         assert!((v[0].burn_rate_per_min.unwrap() - 12.0).abs() < 1e-9);
-        // projection_pct = sum_tokens(2050) / projection.total_tokens(4100) = 0.5
         assert!((v[0].projection_pct.unwrap() - 0.5).abs() < 1e-9);
+        assert_eq!(v[0].remaining_minutes, Some(200));
     }
 
     #[test]
@@ -332,5 +358,11 @@ mod tests {
     fn parse_blocks_empty_envelope() {
         let v = parse_blocks(b"{}").unwrap();
         assert!(v.is_empty());
+    }
+
+    #[test]
+    fn extracts_profile_from_home_path() {
+        let p = std::path::PathBuf::from("/tmp/cs/profiles/work/providers/claude/home");
+        assert_eq!(profile_name_from_home(&p), Some("work".into()));
     }
 }

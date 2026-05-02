@@ -1,6 +1,5 @@
 use std::collections::BTreeSet;
 use std::fmt;
-use std::fs;
 
 use serde::Serialize;
 
@@ -24,9 +23,7 @@ pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts) -> Result<()> 
     if global.json {
         emit_json(&report)?;
     } else {
-        let opts = OutputOpts {
-            json: false,
-        };
+        let opts = OutputOpts { json: false };
         emit(opts, &report)?;
     }
     Ok(())
@@ -41,46 +38,16 @@ pub fn build(paths: &Paths, kc: &dyn Keychain) -> Result<ListReport> {
             names.insert(name.to_string());
         }
     }
-    let root = paths.profiles_dir();
-    if root.exists() {
-        if let Ok(entries) = fs::read_dir(&root) {
-            for entry in entries.flatten() {
-                if let Ok(ft) = entry.file_type() {
-                    if !ft.is_dir() {
-                        continue;
-                    }
-                    let name = entry.file_name().to_string_lossy().to_string();
-                    if paths
-                        .profile_provider_home(&name, crate::provider::Provider::Codex.as_str())
-                        .exists()
-                    {
-                        names.insert(name);
-                    }
-                }
-            }
-        }
-    }
     let mut profiles = Vec::new();
     for name in names {
         let account = keychain::profile_account(&name);
-        let claude_blob = kc.read(&account);
-        let mut summary = match &claude_blob {
-            Ok(bytes) => match OauthCreds::parse(bytes) {
+        let summary = match kc.read(&account) {
+            Ok(bytes) => match OauthCreds::parse(&bytes) {
                 Ok(creds) => ProfileSummary::from_creds(&name, &creds),
                 Err(_) => ProfileSummary::unknown(&name),
             },
             Err(_) => ProfileSummary::unknown(&name),
         };
-        summary.providers.clear();
-        if claude_blob.is_ok() {
-            summary.providers.push("claude".to_string());
-        }
-        if paths
-            .profile_provider_home(&name, crate::provider::Provider::Codex.as_str())
-            .exists()
-        {
-            summary.providers.push("codex".to_string());
-        }
         profiles.push(summary);
     }
     profiles.sort_by(|a, b| a.name.cmp(&b.name));
@@ -107,7 +74,7 @@ impl fmt::Display for ListReport {
             writeln!(f, "(no profiles saved)")?;
             writeln!(
                 f,
-                "Save Claude with `cs save <name>` or initialize Codex with `cs codex init <name>`."
+                "Save Claude with `cs save <name>` after `claude /login`."
             )?;
             return Ok(());
         }
@@ -129,15 +96,10 @@ impl fmt::Display for ListReport {
                 Some(secs) => human_expiry(secs),
                 None => "—".into(),
             };
-            let providers = if p.providers.is_empty() {
-                "—".to_string()
-            } else {
-                p.providers.join("+")
-            };
             writeln!(
                 f,
-                "{:<3}{:<18}{:<32}{:<10}{:<24} providers={}",
-                mark, p.name, email, plan, expires, providers
+                "{:<3}{:<18}{:<32}{:<10}{:<24}",
+                mark, p.name, email, plan, expires
             )?;
         }
         if self.active.is_none() {

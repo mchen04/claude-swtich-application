@@ -1,6 +1,6 @@
 # cs — Spec
 
-A faster, fuller successor to [`claude-switch`](https://github.com/Mamdouh66/claude-switch). One CLI to swap Claude Code accounts in under a second **and** a live TUI for usage + token health, with a master-profile model so skills/commands/agents are shared across accounts instead of duplicated.
+One CLI to swap Claude Code accounts in under a second **and** a multi-account dashboard for usage + token health across every saved profile, with a master-profile model so skills/commands/agents are shared across accounts instead of duplicated.
 
 **Name:** `cs`. Long form: `claude-switch`.
 
@@ -97,7 +97,10 @@ Three categories, named explicitly so we never swap the wrong thing.
 
 **Usage**
 - `cs status` — one-shot snapshot for scripts
-- `cs usage [--watch]` — live usage block
+- `cs usage` — multi-account dashboard: one row per saved Claude profile with
+  5-hour window status (used / time-remaining / burn / weekly tokens / plan).
+  `--price` opts into cost columns; `--daily` and `--monthly` swap the
+  weekly column for today / 30 days; `--watch` repaints every 1s.
 - `cs refresh [profile]` — force OAuth refresh
 - `cs doctor` — Keychain access, symlink integrity, `claude` and `npx`/`bunx` on PATH, clock skew
 
@@ -161,7 +164,13 @@ Single-screen, keyboard-driven, ~1s refresh, ~30 lines tall.
 
 **Bundling:** require `node`/`npx` (or `bunx`) on PATH for v1; `cs doctor` checks. v2: port the minimal jsonl-parser path natively, keep ccusage as an optional accelerator.
 
-**Per-profile attribution:** `stats-cache.json` is per-machine, not per-account, and ccusage doesn't know which profile a session belonged to. We tag each session at switch time — append `{session_id, profile, ts}` to `~/.claude-cs/session-tags.jsonl` whenever a new session jsonl appears while a profile is active. Our reader joins this with ccusage output to split totals by profile. Non-invasive, no Claude Code changes.
+**Per-profile attribution:** each profile gets an isolated Claude home at
+`~/.claude-cs/profiles/<name>/providers/claude/home/`. `cs run <name>` and
+`cs shell <name>` export `CLAUDE_CONFIG_DIR` to that directory, so its
+`projects/` jsonl is per-profile by construction. `cs usage` runs
+`ccusage blocks --json --active` and `ccusage daily --json` once per profile
+with `CLAUDE_CONFIG_DIR` pointed at that profile's home, so attribution is
+exact — no post-hoc session tagging needed.
 
 ## 9. Switch flow
 
