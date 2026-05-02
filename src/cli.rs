@@ -7,7 +7,7 @@ use clap::{ArgAction, Args, Parser, Subcommand};
     about = "Claude profile switcher",
     long_about = "Sub-second Claude profile switching with isolated per-profile homes, \
                   master-profile sharing of skills/commands/agents/CLAUDE.md, and a \
-                  multi-account usage dashboard showing 5-hour window status across every profile.",
+                  multi-account usage dashboard showing % of the 5-hour block and weekly cap left.",
     propagate_version = true,
     disable_help_subcommand = true
 )]
@@ -50,7 +50,7 @@ pub enum Command {
     List,
     /// Show active profile (or named profile) details.
     Status(StatusArgs),
-    /// Show per-profile 5-hour window status across every saved Claude profile.
+    /// Show per-profile % of 5h block and weekly cap remaining (mirrors `/usage`).
     Usage(UsageArgs),
     /// Snapshot the current Claude Code Keychain entry into a named profile.
     Save(SaveArgs),
@@ -109,18 +109,10 @@ pub struct StatusArgs {
 
 #[derive(Debug, Args, Default)]
 pub struct UsageArgs {
-    /// Update the display continuously (~1s cadence).
+    /// Update the display continuously (~1s cadence). Cached limits stay reused; only
+    /// the reset countdowns recompute every tick.
     #[arg(long)]
     pub watch: bool,
-    /// Replace the WEEKLY USED column with TODAY (today's tokens only).
-    #[arg(long, conflicts_with = "monthly")]
-    pub daily: bool,
-    /// Replace the WEEKLY USED column with 30D (sum of last 30 days).
-    #[arg(long, conflicts_with = "daily")]
-    pub monthly: bool,
-    /// Add `5H $` and `WEEKLY $` cost columns.
-    #[arg(long)]
-    pub price: bool,
 }
 
 #[derive(Debug, Args)]

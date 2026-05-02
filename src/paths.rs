@@ -93,6 +93,10 @@ impl Paths {
         self.claude_home.join("projects")
     }
 
+    pub fn usage_limits_cache_dir(&self) -> PathBuf {
+        self.cs_home.join("cache").join("usage-limits")
+    }
+
     pub fn ensure_cs_home(&self) -> Result<()> {
         std::fs::create_dir_all(&self.cs_home).map_err(|e| Error::io_at(&self.cs_home, e))?;
         Ok(())

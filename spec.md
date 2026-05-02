@@ -98,11 +98,11 @@ Three categories, named explicitly so we never swap the wrong thing.
 **Usage**
 - `cs status` — one-shot snapshot for scripts
 - `cs usage` — multi-account dashboard: one row per saved Claude profile with
-  5-hour window status (used / time-remaining / burn / weekly tokens / plan).
-  `--price` opts into cost columns; `--daily` and `--monthly` swap the
-  weekly column for today / 30 days; `--watch` repaints every 1s.
+  % of the rolling 5-hour block and weekly cap remaining, plus reset countdowns
+  and plan. Mirrors what Claude Code's `/usage` slash command shows.
+  `--watch` repaints every 1s.
 - `cs refresh [profile]` — force OAuth refresh
-- `cs doctor` — Keychain access, symlink integrity, `claude` and `npx`/`bunx` on PATH, clock skew
+- `cs doctor` — Keychain access, symlink integrity, `claude` on PATH, clock skew
 
 **Setup**
 - `cs setup` — interactive wizard
@@ -148,29 +148,41 @@ Single-screen, keyboard-driven, ~1s refresh, ~30 lines tall.
 
 ## 8. Usage data sources
 
-**Decision: use [`ccusage`](https://github.com/ryoppippi/ccusage), not `/usage`.** `/usage` is an interactive slash command — automating it requires pty-driving a Claude session per refresh: brittle, slow, steals focus. `ccusage` reads the same on-disk jsonl, ships a maintained model price table, and its `blocks` command computes the 5-hour billing windows the subscription quota is keyed to.
+**Decision: call `/api/oauth/usage` directly per profile.** This is the
+undocumented endpoint that backs Claude Code's `/usage` slash command. Its
+response carries the bucket utilizations the subscription quota is actually
+keyed to (rolling 5-hour and weekly), so what `cs usage` shows for a profile
+matches what `/usage` would show for that same logged-in account — to within
+the 300s cache window.
 
 | Datum | Source | Notes |
 |---|---|---|
 | Email, plan, OAuth expiry | Keychain `claudeAiOauth.*` | Already used by claude-switch |
-| 5-hour active block (% used, time-to-reset) | `ccusage blocks --json --active` | Subprocess, debounced |
-| Daily / weekly tokens + cost | `ccusage daily --json` / `monthly --json` | Cached, refresh ~30s |
-| Per-session live tokens | We tail latest `*.jsonl` under `~/.claude/projects/<encoded-cwd>/` | Faster than re-spawning ccusage; same shape (`usage.{input_tokens, output_tokens, cache_*}`) |
-| Daily message / session / tool counts | `~/.claude/stats-cache.json` | For the cross-profile pane; cheap to read |
+| % of 5-hour block + reset, % of weekly cap + reset | `GET /api/oauth/usage` with the profile's saved OAuth bearer | Per-profile token, no Claude session needed |
 
-**Why mix our tail with ccusage:** ccusage has no `--watch`, and re-invoking it per keystroke is wasteful. We tail the active jsonl ourselves for the per-token feel and call ccusage on a slower cadence for the heavier aggregates and the authoritative 5-hour block.
+**Endpoint contract:**
 
-**Refresh:** filesystem-watch `~/.claude/projects/<cwd>/` and `stats-cache.json`. Recompute the active-session pane on change; debounce ccusage to once per ~5s.
+- `GET https://api.anthropic.com/api/oauth/usage`
+- `Authorization: Bearer <claudeAiOauth.accessToken>`
+- `anthropic-beta: oauth-2025-04-20`
+- Response: `{ five_hour: {utilization, resets_at}, seven_day: {utilization, resets_at}, seven_day_sonnet, seven_day_opus, extra_usage }`. `utilization` is percent **used** (0–100); we render `100 − utilization`.
 
-**Bundling:** require `node`/`npx` (or `bunx`) on PATH for v1; `cs doctor` checks. v2: port the minimal jsonl-parser path natively, keep ccusage as an optional accelerator.
+**Caching:** the endpoint 429s aggressively. Each profile's response is
+written to `~/.claude-cs/cache/usage-limits/<profile>.json` with a
+`fetched_at_unix` stamp; subsequent reads within 300s reuse the cached
+payload, and a 429 falls back to the last cached value (even past TTL) with
+a warning surfaced in the report.
 
-**Per-profile attribution:** each profile gets an isolated Claude home at
-`~/.claude-cs/profiles/<name>/providers/claude/home/`. `cs run <name>` and
-`cs shell <name>` export `CLAUDE_CONFIG_DIR` to that directory, so its
-`projects/` jsonl is per-profile by construction. `cs usage` runs
-`ccusage blocks --json --active` and `ccusage daily --json` once per profile
-with `CLAUDE_CONFIG_DIR` pointed at that profile's home, so attribution is
-exact — no post-hoc session tagging needed.
+**Refresh:** `cs usage --watch` redraws every second from cached payloads;
+the live fetch only happens when the cache is older than 300s. Reset
+countdowns recompute every tick from the cached `resets_at` timestamps so
+the display feels live without re-hitting the endpoint.
+
+**Per-profile attribution:** the OAuth token is per-profile, so the response
+is per-profile by construction — no isolated home or session tagging
+needed for `cs usage`. (The isolated `~/.claude-cs/profiles/<name>/providers/claude/home/`
+homes still exist for `cs run` / `cs shell` so the `projects/` jsonl is
+isolated, but `cs usage` no longer reads it.)
 
 ## 9. Switch flow
 
@@ -214,7 +226,7 @@ exact — no post-hoc session tagging needed.
 |---|---|
 | M1 | Core swap: `cs <profile>`, `save`, `list`, `rm`, `refresh`, `status`, `doctor`. Keychain compat. |
 | M2 | Master profile: `cs master <name>` / `--unset`, symlink layout, `uninstall` reverses cleanly. |
-| M3 | TUI: profile pane, session pane, key-driven switch, fs-watch refresh, ccusage integration. |
+| M3 | TUI: profile pane, session pane, key-driven switch, fs-watch refresh, `/api/oauth/usage` integration. |
 | M4 | QoL v1 cut: cwd auto-switch, prompt indicator, expiry/quota notifications, audit log. |
 | M5 | Linux secret-service backend; `export`/`import`; brew release. |
 

@@ -30,6 +30,7 @@ notify = "6"
 notify-debouncer-mini = "0.4"
 crossterm = "0.27"
 base64 = "0.22"
+ureq = { version = "2", features = ["json", "tls"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "2"

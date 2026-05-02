@@ -5,20 +5,17 @@ use chrono::{DateTime, Utc};
 use crossterm::{cursor, terminal, ExecutableCommand};
 use serde::Serialize;
 
-use std::path::PathBuf;
-
 use crate::cli::{GlobalOpts, UsageArgs};
 use crate::commands::list;
 use crate::error::Result;
-use crate::keychain::Keychain;
+use crate::keychain::{self, Keychain};
 use crate::output::{emit_json, emit_text, OutputOpts};
 use crate::paths::Paths;
-use crate::profile::ProfileSummary;
-use crate::usage::{ccusage::CcusageClient, DailyTotal};
+use crate::profile::OauthCreds;
+use crate::usage::{limits, LimitsError};
 
 #[derive(Debug, Serialize)]
 struct UsageReport {
-    mode: &'static str,
     generated_at: String,
     rows: Vec<UsageRow>,
     warnings: Vec<String>,
@@ -29,12 +26,12 @@ struct UsageRow {
     profile: String,
     is_active: bool,
     plan: Option<String>,
-    used_5h: u64,
-    left_5h: String,
-    burn_per_min: Option<f64>,
-    weekly_used: u64,
-    cost_5h: f64,
-    cost_weekly: f64,
+    five_h_pct_left: Option<u8>,
+    five_h_resets_in: Option<String>,
+    weekly_pct_left: Option<u8>,
+    weekly_resets_in: Option<String>,
+    weekly_sonnet_pct_left: Option<u8>,
+    weekly_opus_pct_left: Option<u8>,
     error: Option<String>,
 }
 
@@ -44,104 +41,70 @@ pub fn run(
     global: &GlobalOpts,
     args: &UsageArgs,
 ) -> Result<()> {
-    let client = CcusageClient::new();
     if args.watch {
-        return run_watch(paths, kc, &client, global, args);
+        return run_watch(paths, kc, global);
     }
-    let report = build(paths, kc, &client, args)?;
+    let report = build(paths, kc)?;
     if global.json {
         emit_json(&report)?;
     } else {
-        emit_text(
-            OutputOpts { json: false },
-            &TextReport {
-                report: &report,
-                with_price: args.price,
-            },
-        )?;
+        emit_text(OutputOpts { json: false }, &TextReport { report: &report })?;
     }
     Ok(())
 }
 
-fn build(
-    paths: &Paths,
-    kc: &dyn Keychain,
-    client: &CcusageClient,
-    args: &UsageArgs,
-) -> Result<UsageReport> {
+fn build(paths: &Paths, kc: &dyn Keychain) -> Result<UsageReport> {
     let now = Utc::now();
     let listing = list::build(paths, kc)?;
     let mut warnings = Vec::new();
     let mut rows = Vec::new();
 
-    let mode = mode_of(args);
-
     for p in &listing.profiles {
-        let home = effective_home_for(paths, p);
-        // ccusage refuses to start unless `<home>/projects` exists.
-        std::fs::create_dir_all(home.join("projects")).ok();
-
         let mut row = UsageRow {
             profile: p.name.clone(),
             is_active: p.is_active,
             plan: p.plan.clone(),
-            used_5h: 0,
-            left_5h: "—".into(),
-            burn_per_min: None,
-            weekly_used: 0,
-            cost_5h: 0.0,
-            cost_weekly: 0.0,
+            five_h_pct_left: None,
+            five_h_resets_in: None,
+            weekly_pct_left: None,
+            weekly_resets_in: None,
+            weekly_sonnet_pct_left: None,
+            weekly_opus_pct_left: None,
             error: None,
         };
 
-        let blocks = match client.active_blocks_for(&home) {
-            Ok(b) => b,
-            Err(e) => {
-                let msg = condense_err(&format!("blocks: {e}"));
+        let creds = match read_creds(kc, &p.name) {
+            Ok(c) => c,
+            Err(msg) => {
                 warnings.push(format!("{}: {msg}", p.name));
                 row.error = Some(msg);
-                Vec::new()
+                rows.push(row);
+                continue;
             }
         };
-        let daily = match client.daily_for(&home) {
-            Ok(d) => d,
+
+        match limits::fetch_for(&p.name, &creds, paths) {
+            Ok(outcome) => {
+                let l = &outcome.limits;
+                row.five_h_pct_left = Some(pct_left(l.five_hour.utilization));
+                row.five_h_resets_in = resets_in(now, l.five_hour.resets_at.as_deref());
+                row.weekly_pct_left = Some(pct_left(l.seven_day.utilization));
+                row.weekly_resets_in = resets_in(now, l.seven_day.resets_at.as_deref());
+                row.weekly_sonnet_pct_left =
+                    l.seven_day_sonnet.as_ref().map(|b| pct_left(b.utilization));
+                row.weekly_opus_pct_left =
+                    l.seven_day_opus.as_ref().map(|b| pct_left(b.utilization));
+                if outcome.stale {
+                    warnings.push(format!(
+                        "{}: rate-limited; showing cached values",
+                        p.name
+                    ));
+                }
+            }
             Err(e) => {
-                let msg = condense_err(&format!("daily: {e}"));
+                let msg = condense_err(&e.to_string());
                 warnings.push(format!("{}: {msg}", p.name));
-                if row.error.is_none() {
-                    row.error = Some(msg);
-                }
-                Vec::new()
-            }
-        };
-
-        if let Some(b) = blocks.first() {
-            row.used_5h = b.tokens_in
-                + b.tokens_out
-                + b.cache_creation_tokens
-                + b.cache_read_tokens;
-            row.left_5h = fmt_remaining(now, b.resets_at.as_deref(), b.remaining_minutes);
-            row.burn_per_min = b.burn_rate_per_min;
-            row.cost_5h = b.cost_usd;
-        }
-
-        match mode {
-            Mode::Blocks => {
-                let last = take_last(&daily, 7);
-                row.weekly_used = last.iter().map(|d| d.total_tokens).sum();
-                row.cost_weekly = last.iter().map(|d| d.cost_usd).sum::<f64>().max(0.0);
-            }
-            Mode::Daily => {
-                let today = now.format("%Y-%m-%d").to_string();
-                if let Some(d) = daily.iter().find(|d| d.date == today) {
-                    row.weekly_used = d.total_tokens;
-                    row.cost_weekly = d.cost_usd.max(0.0);
-                }
-            }
-            Mode::Monthly => {
-                let last = take_last(&daily, 30);
-                row.weekly_used = last.iter().map(|d| d.total_tokens).sum();
-                row.cost_weekly = last.iter().map(|d| d.cost_usd).sum::<f64>().max(0.0);
+                row.error = Some(msg);
             }
         }
 
@@ -155,25 +118,26 @@ fn build(
     });
 
     Ok(UsageReport {
-        mode: mode.as_str(),
         generated_at: now.to_rfc3339(),
         rows,
         warnings,
     })
 }
 
-fn run_watch(
-    paths: &Paths,
-    kc: &dyn Keychain,
-    client: &CcusageClient,
-    global: &GlobalOpts,
-    args: &UsageArgs,
-) -> Result<()> {
+fn read_creds(kc: &dyn Keychain, profile: &str) -> std::result::Result<OauthCreds, String> {
+    let account = keychain::profile_account(profile);
+    let bytes = kc
+        .read(&account)
+        .map_err(|e| condense_err(&format!("keychain: {e}")))?;
+    OauthCreds::parse(&bytes).map_err(|_| "no OAuth creds (API-key profile)".to_string())
+}
+
+fn run_watch(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts) -> Result<()> {
     let mut stdout = std::io::stdout();
     let _ = stdout.execute(cursor::Hide);
     let mut first = true;
     loop {
-        let report = build(paths, kc, client, args)?;
+        let report = build(paths, kc)?;
         if !first {
             let _ = stdout.execute(cursor::MoveToColumn(0));
             let _ = stdout.execute(terminal::Clear(terminal::ClearType::FromCursorDown));
@@ -185,14 +149,7 @@ fn run_watch(
             serde_json::to_writer_pretty(&mut stdout, &report)?;
             writeln!(stdout, "\n(updated {})", chrono::Utc::now().to_rfc3339())?;
         } else {
-            write!(
-                stdout,
-                "{}",
-                TextReport {
-                    report: &report,
-                    with_price: args.price,
-                }
-            )?;
+            write!(stdout, "{}", TextReport { report: &report })?;
             writeln!(stdout, "(updated {})", chrono::Utc::now().to_rfc3339())?;
         }
         stdout.flush().ok();
@@ -200,122 +157,28 @@ fn run_watch(
     }
 }
 
-#[derive(Clone, Copy)]
-enum Mode {
-    Blocks,
-    Daily,
-    Monthly,
+fn pct_left(utilization: u8) -> u8 {
+    100u8.saturating_sub(utilization.min(100))
 }
 
-impl Mode {
-    fn as_str(self) -> &'static str {
-        match self {
-            Mode::Blocks => "blocks",
-            Mode::Daily => "daily",
-            Mode::Monthly => "monthly",
-        }
+fn resets_in(now: DateTime<Utc>, resets_at: Option<&str>) -> Option<String> {
+    let s = resets_at?;
+    let reset = DateTime::parse_from_rfc3339(s).ok()?;
+    let secs = (reset.with_timezone(&Utc) - now).num_seconds();
+    if secs <= 0 {
+        return None;
     }
-}
-
-fn mode_of(a: &UsageArgs) -> Mode {
-    if a.daily {
-        Mode::Daily
-    } else if a.monthly {
-        Mode::Monthly
+    let days = secs / 86_400;
+    let rest = secs % 86_400;
+    let hours = rest / 3_600;
+    let mins = (rest % 3_600) / 60;
+    if days > 0 {
+        Some(format!("{days}d{hours:02}h"))
     } else {
-        Mode::Blocks
+        Some(format!("{hours}h{mins:02}m"))
     }
 }
 
-fn take_last(daily: &[DailyTotal], n: usize) -> Vec<&DailyTotal> {
-    let mut sorted: Vec<&DailyTotal> = daily.iter().collect();
-    sorted.sort_by(|a, b| b.date.cmp(&a.date));
-    sorted.into_iter().take(n).collect()
-}
-
-fn fmt_remaining(
-    now: DateTime<Utc>,
-    resets_at: Option<&str>,
-    fallback_minutes: Option<u64>,
-) -> String {
-    if let Some(s) = resets_at {
-        if let Ok(reset) = DateTime::parse_from_rfc3339(s) {
-            let secs = (reset.with_timezone(&Utc) - now).num_seconds();
-            if secs > 0 {
-                let h = secs / 3600;
-                let m = (secs % 3600) / 60;
-                return format!("{h}h{m:02}m");
-            }
-        }
-    }
-    if let Some(mins) = fallback_minutes {
-        if mins > 0 {
-            let h = mins / 60;
-            let m = mins % 60;
-            return format!("{h}h{m:02}m");
-        }
-    }
-    "—".into()
-}
-
-fn fmt_tokens(n: u64) -> String {
-    if n == 0 {
-        return "0 tok".to_string();
-    }
-    if n >= 1_000_000 {
-        format!("{:.1}M tok", n as f64 / 1_000_000.0)
-    } else if n >= 1_000 {
-        format!("{}k tok", n / 1_000)
-    } else {
-        format!("{n} tok")
-    }
-}
-
-/// Pick which Claude home to point ccusage at for this profile.
-///
-/// Default = the per-profile isolated home. Once users start launching claude via
-/// `cs run` / `cs shell`, that's where the jsonl accumulates. But during the
-/// transition (and for users who only run `claude` directly), the per-profile
-/// `projects/` is empty while `~/.claude/projects/` has the real data — for the
-/// active profile we fall back to the canonical home so day-one usage isn't blank.
-fn effective_home_for(paths: &Paths, p: &ProfileSummary) -> PathBuf {
-    let per_profile = paths.profile_provider_home(&p.name, "claude");
-    if p.is_active && projects_is_empty(&per_profile) {
-        let canonical_projects = paths.claude_home.join("projects");
-        if has_jsonl(&canonical_projects) {
-            return paths.claude_home.clone();
-        }
-    }
-    per_profile
-}
-
-fn projects_is_empty(home: &std::path::Path) -> bool {
-    !has_jsonl(&home.join("projects"))
-}
-
-fn has_jsonl(dir: &std::path::Path) -> bool {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return false;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_file()
-            && path
-                .extension()
-                .and_then(|e| e.to_str())
-                .is_some_and(|e| e == "jsonl")
-        {
-            return true;
-        }
-        if path.is_dir() && has_jsonl(&path) {
-            return true;
-        }
-    }
-    false
-}
-
-/// ccusage on a missing home dumps a multi-line JS stack trace through stderr.
-/// Keep just the first informative line so the table stays readable.
 fn condense_err(msg: &str) -> String {
     let trimmed = msg
         .lines()
@@ -333,16 +196,8 @@ fn condense_err(msg: &str) -> String {
     }
 }
 
-fn fmt_burn(rate: Option<f64>) -> String {
-    match rate {
-        Some(r) if r > 0.0 => format!("{}/m", r.round() as u64),
-        _ => "—".into(),
-    }
-}
-
 struct TextReport<'a> {
     report: &'a UsageReport,
-    with_price: bool,
 }
 
 impl std::fmt::Display for TextReport<'_> {
@@ -351,53 +206,76 @@ impl std::fmt::Display for TextReport<'_> {
             writeln!(f, "(no claude profiles saved — `cs save <name>` to add one)")?;
             return Ok(());
         }
-        let third = match self.report.mode {
-            "daily" => "TODAY",
-            "monthly" => "30D",
-            _ => "WEEKLY USED",
-        };
-        write!(
+        writeln!(
             f,
-            "{:<3}{:<18}{:<14}{:<10}{:<9}{:<18}{:<8}",
-            "", "PROFILE", "5H USED", "5H LEFT", "BURN", third, "PLAN"
+            "{:<3}{:<18}{:<10}{:<13}{:<10}{:<13}{:<8}",
+            "", "PROFILE", "5H LEFT", "5H RESETS", "7D LEFT", "7D RESETS", "PLAN"
         )?;
-        if self.with_price {
-            let third_price = match self.report.mode {
-                "daily" => "TODAY $",
-                "monthly" => "30D $",
-                _ => "WEEKLY $",
-            };
-            write!(f, "{:<11}{:<11}", "5H $", third_price)?;
-        }
-        writeln!(f)?;
-
         for r in &self.report.rows {
             let mark = if r.is_active { "* " } else { "  " };
             let plan = r.plan.as_deref().unwrap_or("—");
+            let five_pct = r
+                .five_h_pct_left
+                .map(|p| format!("{p}%"))
+                .unwrap_or_else(|| "—".into());
+            let five_reset = r.five_h_resets_in.clone().unwrap_or_else(|| "—".into());
+            let week_pct = r
+                .weekly_pct_left
+                .map(|p| format!("{p}%"))
+                .unwrap_or_else(|| "—".into());
+            let week_reset = r.weekly_resets_in.clone().unwrap_or_else(|| "—".into());
             write!(
                 f,
-                "{:<3}{:<18}{:<14}{:<10}{:<9}{:<18}{:<8}",
-                mark,
-                r.profile,
-                fmt_tokens(r.used_5h),
-                r.left_5h,
-                fmt_burn(r.burn_per_min),
-                fmt_tokens(r.weekly_used),
-                plan,
+                "{:<3}{:<18}{:<10}{:<13}{:<10}{:<13}{:<8}",
+                mark, r.profile, five_pct, five_reset, week_pct, week_reset, plan
             )?;
-            if self.with_price {
-                let cost_5h = format!("${:.2}", r.cost_5h.max(0.0));
-                let cost_w = format!("${:.2}", r.cost_weekly.max(0.0));
-                write!(f, "{cost_5h:<11}{cost_w:<11}")?;
+            if let Some(err) = &r.error {
+                write!(f, "    ↳ {err}")?;
             }
             writeln!(f)?;
-            if let Some(err) = &r.error {
-                writeln!(f, "   ↳ {err}")?;
-            }
         }
         if !self.report.warnings.is_empty() {
             writeln!(f)?;
+            for w in &self.report.warnings {
+                writeln!(f, "warning: {w}")?;
+            }
         }
         Ok(())
+    }
+}
+
+impl From<LimitsError> for crate::error::Error {
+    fn from(e: LimitsError) -> Self {
+        crate::error::Error::Other(e.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pct_left_inverts_utilization() {
+        assert_eq!(pct_left(0), 100);
+        assert_eq!(pct_left(37), 63);
+        assert_eq!(pct_left(100), 0);
+        assert_eq!(pct_left(250), 0);
+    }
+
+    #[test]
+    fn resets_in_handles_past_and_future() {
+        let now = DateTime::parse_from_rfc3339("2026-05-02T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        // 2 hours and 14 minutes ahead.
+        let s = "2026-05-02T14:14:00Z";
+        assert_eq!(resets_in(now, Some(s)).as_deref(), Some("2h14m"));
+        // Past — returns None.
+        assert!(resets_in(now, Some("2026-05-01T00:00:00Z")).is_none());
+        // Multi-day.
+        assert_eq!(
+            resets_in(now, Some("2026-05-06T16:00:00Z")).as_deref(),
+            Some("4d04h")
+        );
     }
 }

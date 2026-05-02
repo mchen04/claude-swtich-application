@@ -37,10 +37,10 @@ All filesystem and keychain access is injectable:
 - `CS_HOME` — cs state directory (default `~/.claude-cs`)
 - `CS_TEST_KEYCHAIN=1` — swap the macOS keychain backend for an in-memory JSON mock
 - `CS_TEST_KEYCHAIN_FIXTURE=/path/to.json` — seed the mock with `{account: blob}` entries
-- `CS_TEST_DISABLE_CCUSAGE=1` — force ccusage subprocesses to fail (for fallback testing)
-- `CS_TEST_CCUSAGE_FIXTURE=/dir` — read ccusage output from
-  `<dir>/<profile>-blocks.json` and `<dir>/<profile>-daily.json` (falls back to
-  `<dir>/<mode>.json`)
+- `CS_TEST_LIMITS_FIXTURE=/dir` — read `/api/oauth/usage` payloads from
+  `<dir>/<profile>.json` instead of hitting the network
+- `CS_TEST_LIMITS_FAIL=/dir` — force a failure mode per profile via
+  `<dir>/<profile>.txt` containing one of `expired`, `rate_limited`, `http`
 
 ## Key Design Decisions
 
@@ -51,8 +51,10 @@ All filesystem and keychain access is injectable:
 - **Per-profile isolation** — `cs run <profile>` materializes an isolated home
   under `~/.claude-cs/profiles/<name>/providers/claude/home/` and exports
   `CLAUDE_CONFIG_DIR` + `CLAUDE_HOME` so claude reads only that profile's
-  `projects/` jsonl. The same per-home seam powers per-profile ccusage in
-  `cs usage`.
+  `projects/` jsonl.
+- **Usage dashboard** — `cs usage` calls `/api/oauth/usage` per profile using
+  the saved OAuth token; responses are cached at
+  `~/.claude-cs/cache/usage-limits/<profile>.json` for 300s to avoid 429s.
 - **Atomic writes** — all file mutations go through `jsonio::atomic_write_bytes` (tempfile +
   `rename(2)`) to avoid torn writes.
 - **Rollback manifests** — every destructive op writes

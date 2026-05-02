@@ -971,3 +971,144 @@ fn codex_run_uses_isolated_home() {
         .stdout(predicate::str::contains("model = \"work\""))
         .stdout(predicate::str::contains("linked"));
 }
+
+// --- Phase E: usage % view -----------------------------------------------------
+
+#[test]
+fn usage_default_shows_pct_columns() {
+    let (dir, claude_home, cs_home) = isolated();
+    let blob = fake_oauth("work@example.com", 3600);
+    let fixture = fixture_path(
+        dir.path(),
+        &[
+            ("test-user", &blob),
+            ("Claude Code-credentials-work", &blob),
+        ],
+    );
+
+    let limits_dir = dir.path().join("limits");
+    std::fs::create_dir_all(&limits_dir).unwrap();
+    std::fs::write(
+        limits_dir.join("work.json"),
+        br#"{
+            "five_hour":  { "utilization": 37, "resets_at": "2099-01-01T00:00:00Z" },
+            "seven_day":  { "utilization": 64, "resets_at": "2099-01-01T00:00:00Z" },
+            "seven_day_sonnet": null,
+            "seven_day_opus":   null,
+            "extra_usage":      { "is_enabled": false }
+        }"#,
+    )
+    .unwrap();
+
+    let json = phase_c_env(&claude_home, &cs_home, &fixture)
+        .env("CS_TEST_LIMITS_FIXTURE", &limits_dir)
+        .args(["usage", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let v: serde_json::Value = serde_json::from_slice(&json).expect("valid json");
+    let row = &v["rows"][0];
+    assert_eq!(row["profile"], "work");
+    assert_eq!(row["five_h_pct_left"], 63);
+    assert_eq!(row["weekly_pct_left"], 36);
+    assert!(row["error"].is_null());
+
+    let text_out = phase_c_env(&claude_home, &cs_home, &fixture)
+        .env("CS_TEST_LIMITS_FIXTURE", &limits_dir)
+        .arg("usage")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8(text_out).unwrap();
+    assert!(text.contains("5H LEFT"), "missing 5H LEFT header: {text}");
+    assert!(text.contains("63%"), "missing 63% cell: {text}");
+}
+
+#[test]
+fn usage_token_expired_shows_dash() {
+    let (dir, claude_home, cs_home) = isolated();
+    let canonical = fake_oauth("primary@example.com", 3600);
+    // The work profile's OAuth blob is already expired.
+    let work_expired = fake_oauth("work@example.com", -3_600);
+    let fixture = fixture_path(
+        dir.path(),
+        &[
+            ("test-user", &canonical),
+            ("Claude Code-credentials-work", &work_expired),
+        ],
+    );
+
+    let json = phase_c_env(&claude_home, &cs_home, &fixture)
+        .args(["usage", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let v: serde_json::Value = serde_json::from_slice(&json).expect("valid json");
+    let row = &v["rows"][0];
+    assert_eq!(row["profile"], "work");
+    assert!(row["five_h_pct_left"].is_null());
+    let err = row["error"].as_str().expect("error string set");
+    assert!(err.contains("token expired"), "unexpected error: {err}");
+    assert!(err.contains("cs refresh"), "missing refresh hint: {err}");
+}
+
+#[test]
+fn usage_rate_limited_serves_cached_then_warns() {
+    let (dir, claude_home, cs_home) = isolated();
+    let blob = fake_oauth("work@example.com", 3600);
+    let fixture = fixture_path(
+        dir.path(),
+        &[
+            ("test-user", &blob),
+            ("Claude Code-credentials-work", &blob),
+        ],
+    );
+
+    // Prime the on-disk cache so rate_limited can fall back to it.
+    let cache_dir = cs_home.join("cache").join("usage-limits");
+    std::fs::create_dir_all(&cache_dir).unwrap();
+    std::fs::write(
+        cache_dir.join("work.json"),
+        br#"{
+            "fetched_at_unix": 1700000000,
+            "payload": {
+                "five_hour": { "utilization": 20, "resets_at": null },
+                "seven_day": { "utilization": 50, "resets_at": null },
+                "seven_day_sonnet": null,
+                "seven_day_opus": null
+            }
+        }"#,
+    )
+    .unwrap();
+
+    let fail_dir = dir.path().join("fail");
+    std::fs::create_dir_all(&fail_dir).unwrap();
+    std::fs::write(fail_dir.join("work.txt"), b"rate_limited").unwrap();
+
+    let json = phase_c_env(&claude_home, &cs_home, &fixture)
+        .env("CS_TEST_LIMITS_FAIL", &fail_dir)
+        .args(["usage", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let v: serde_json::Value = serde_json::from_slice(&json).expect("valid json");
+    let row = &v["rows"][0];
+    assert_eq!(row["five_h_pct_left"], 80);
+    assert_eq!(row["weekly_pct_left"], 50);
+    assert!(row["error"].is_null());
+    let warnings = v["warnings"].as_array().expect("warnings array");
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.as_str().unwrap_or_default().contains("rate-limited")),
+        "expected rate-limited warning: {warnings:?}"
+    );
+}

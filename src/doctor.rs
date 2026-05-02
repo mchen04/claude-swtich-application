@@ -82,11 +82,6 @@ pub fn run(paths: &Paths, kc: &dyn Keychain) -> Result<DoctorReport> {
 
     let tooling = vec![
         check_tool("claude", &["--version"]),
-        check_tool("node", &["--version"]),
-        check_tool("npx", &["--version"]),
-        check_tool("bun", &["--version"]),
-        check_tool("bunx", &["--version"]),
-        check_ccusage(),
         check_presence("security", "/usr/bin/security"),
         check_tool("jq", &["--version"]),
         check_tool("age", &["--version"]),
@@ -161,30 +156,6 @@ fn check_presence(name: &str, expected_path: &str) -> ToolCheck {
         } else {
             Some(format!("not at {expected_path}"))
         },
-    }
-}
-
-fn check_ccusage() -> ToolCheck {
-    // Prefer bunx (faster) then npx.
-    for cmd in ["bunx", "npx"] {
-        let out = Command::new(cmd).args(["ccusage", "--version"]).output();
-        if let Ok(o) = out {
-            if o.status.success() {
-                let v = String::from_utf8_lossy(&o.stdout).trim().to_string();
-                return ToolCheck {
-                    name: format!("ccusage (via {cmd})"),
-                    found: true,
-                    version: if v.is_empty() { None } else { Some(v) },
-                    note: None,
-                };
-            }
-        }
-    }
-    ToolCheck {
-        name: "ccusage".into(),
-        found: false,
-        version: None,
-        note: Some("install via `bun install -g ccusage` or rely on npx auto-fetch".into()),
     }
 }
 

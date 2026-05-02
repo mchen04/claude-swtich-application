@@ -2,7 +2,7 @@
 
 Sub-second switching between Claude Code accounts, with master-profile sharing of
 skills/commands/agents/CLAUDE.md and a multi-account usage dashboard showing the
-5-hour rolling window status across every saved profile.
+% of the 5-hour block and weekly cap remaining for every saved profile.
 
 > Status: v0.1 — phases A–E (CLI surface) complete. Ratatui TUI and cwd
 > auto-switch deferred to follow-up phases.
@@ -51,41 +51,37 @@ cs -                       # toggle to the previous profile
 # 5. inspect state
 cs list                    # all saved profiles, marked with active/default
 cs status --json | jq      # active profile + token expiry
-cs                         # multi-account dashboard: per-profile 5h windows
+cs                         # multi-account dashboard: % of 5h + weekly cap left
 ```
 
 ## Multi-account dashboard
 
 `cs` (no args) and `cs usage` both render a single table with one row per
-saved Claude profile. ccusage runs once per profile against that profile's
-isolated `CLAUDE_CONFIG_DIR`, so usage attribution is exact.
+saved Claude profile. The numbers come straight from `/api/oauth/usage` —
+the same endpoint that backs Claude Code's `/usage` slash command — using
+each profile's saved OAuth token. Responses are cached on disk for 300s
+to stay clear of the endpoint's aggressive 429s.
 
 ```
-   PROFILE           5H USED       5H LEFT   BURN     WEEKLY USED       PLAN
-*  work              1.2M tok      2h17m     320/m    18.4M tok         max
-   personal          0 tok         —         —        0 tok             pro
-   research          45k tok       4h02m     12/m     1.1M tok          pro
+   PROFILE          5H LEFT   5H RESETS    7D LEFT   7D RESETS    PLAN
+*  work             63%       2h14m        36%       3d04h        max
+   personal         91%       4h51m        88%       6d22h        pro
+   research         —         —            —         —            max     ↳ token expired — `cs refresh research`
 ```
 
-- **5H USED** — tokens consumed in the active 5-hour billing block.
-- **5H LEFT** — time until the active block resets (`block.resetTime` minus now,
-  with `projection.remainingMinutes` as fallback). `—` when no active block.
-- **BURN** — current burn rate from ccusage (`tokens/min`).
-- **WEEKLY USED** — sum of the last 7 days' tokens for that profile.
+- **5H LEFT** — `100 − utilization` from the rolling 5-hour bucket.
+- **5H RESETS** — countdown to that bucket's reset.
+- **7D LEFT** — same, for the weekly cap.
+- **7D RESETS** — countdown to the weekly reset (days+hours past 24h).
 - **PLAN** — subscription plan from the OAuth blob (max / pro / team / —).
 - `*` marks the active profile; rows sort active first, then alphabetically.
+- A row with no live data shows `—` and a hint (`token expired — \`cs refresh <name>\``,
+  or `rate-limited` when the endpoint keeps 429-ing past the on-disk cache).
 
-Cost is opt-in. `cs usage --price` adds two columns:
-
-```
-   PROFILE           5H USED       5H LEFT   BURN     WEEKLY USED       PLAN    5H $       WEEKLY $
-*  work              1.2M tok      2h17m     320/m    18.4M tok         max     $4.25      $56.20
-```
-
-`cs usage --daily` swaps the WEEKLY USED column for TODAY (today's tokens
-only). `cs usage --monthly` swaps for 30D (last 30 days). `cs usage --watch`
-repaints the same table every second. `cs usage --json` emits the report
-struct for scripting.
+`cs usage --watch` repaints the same table every second. The 300s limits
+cache means watch reuses cached % values 99% of the time and only re-fetches
+when the cache expires; reset countdowns recompute every tick. `cs usage --json`
+emits the report struct for scripting.
 
 ## Master profile (shared config)
 
@@ -126,11 +122,8 @@ cs default <name>          set the default profile
 cs default-go              switch to the default profile
 cs refresh [<profile>]     refresh OAuth via `claude /status` delegation
 
-cs usage                   per-profile 5-hour window dashboard
-cs usage --price           add 5H $ and WEEKLY $ columns
-cs usage --daily           swap WEEKLY USED column for TODAY
-cs usage --monthly         swap WEEKLY USED column for 30D
-cs usage --watch           live updates every 1s
+cs usage                   per-profile % of 5h + weekly cap remaining
+cs usage --watch           live updates every 1s (cache holds for 300s)
 cs usage --json            emit the report as JSON
 
 cs run <name> -- <args>    launch claude in an isolated per-profile home
@@ -168,7 +161,7 @@ Global flags: --json --no-color --dry-run --profile <name> -v / -vv
 ├── profiles/<name>/
 │   ├── settings.json               # per-profile (replaces canonical on switch)
 │   ├── env                         # KEY=VAL pairs sourced post-switch
-│   ├── providers/claude/home/      # isolated CLAUDE_CONFIG_DIR for `cs run`/`cs shell`/usage
+│   ├── providers/claude/home/      # isolated CLAUDE_CONFIG_DIR for `cs run`/`cs shell`
 │   └── skills/, commands/, …       # only on the profile designated as master
 ├── state.json                      # {active, previous, default, master, switched_at}
 ├── links.json                      # cwd → profile bindings
@@ -201,8 +194,10 @@ cargo build --release
 Test seam: every filesystem and Keychain access is routed through `Paths` and
 the `Keychain` trait so tests can inject a tmpdir + a JSON-backed mock Keychain
 via `CS_TEST_KEYCHAIN=1` and `CS_TEST_KEYCHAIN_FIXTURE=/path/to/fixture.json`.
-For per-profile usage fixtures, point `CS_TEST_CCUSAGE_FIXTURE=/dir` at a
-directory containing `<profile>-blocks.json` and `<profile>-daily.json`.
+For per-profile usage limits fixtures, point `CS_TEST_LIMITS_FIXTURE=/dir` at a
+directory containing `<profile>.json` (matching the `/api/oauth/usage` response
+shape). `CS_TEST_LIMITS_FAIL=/dir` (file `<profile>.txt` with `expired`,
+`rate_limited`, or `http`) exercises error paths without networking.
 
 ## Status / roadmap
 
@@ -210,12 +205,12 @@ directory containing `<profile>-blocks.json` and `<profile>-daily.json`.
 - [x] Phase B — `cs list`, `cs status` (text + JSON)
 - [x] Phase C — save/rm/rename/default/switch/`-`/refresh/setup/alias/migrate
 - [x] Phase D — master profile designation + uninstall (byte-clean roundtrip)
-- [x] Phase E — ccusage data layer, multi-account dashboard, `cs link`/`cs links`
+- [x] Phase E — multi-account % dashboard via `/api/oauth/usage`, `cs link`/`cs links`
 - [ ] Phase F — Ratatui TUI (stub removed; deferred)
 - [ ] Phase G — cwd auto-switch precmd hook, expiry/quota notifications, `cs audit`, `cs revert`
 - [ ] Phase H — `cs export`/`cs import` with `age`, Linux secret-service backend, brew tap
 
 ## Acknowledgements
 
-Usage data comes from [ryoppippi/ccusage](https://github.com/ryoppippi/ccusage),
-invoked per profile via `bunx` / `npx`.
+Usage data comes from Anthropic's `/api/oauth/usage` endpoint — the same one
+that backs Claude Code's `/usage` slash command.
