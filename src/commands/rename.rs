@@ -53,7 +53,6 @@ pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &RenameA
         }
         let opts = OutputOpts {
             json: global.json,
-            no_color: global.no_color,
         };
         crate::output::emit(opts, &plan)?;
         return Ok(());
@@ -61,15 +60,8 @@ pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &RenameA
 
     let _lock = CsLock::acquire(paths)?;
     if let Some(blob) = blob.as_ref() {
-        kc.write(&to_acct, blob)?;
-        if kc.read(&to_acct).map(|b| b == *blob).unwrap_or(false) {
-            kc.delete(&from_acct)?;
-        } else {
-            let _ = kc.delete(&to_acct);
-            return Err(Error::Other(format!(
-                "Keychain write verification failed for {to_acct}; rolled back"
-            )));
-        }
+        keychain::write_verified(kc, &to_acct, blob)?;
+        kc.delete(&from_acct)?;
     }
     if dir_exists {
         if let Some(parent) = to_dir.parent() {

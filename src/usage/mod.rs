@@ -1,3 +1,6 @@
+//! Data models for usage tracking: ccusage integration, stats-cache parsing, and
+//! session tagging.
+
 use serde::{Deserialize, Serialize};
 
 pub mod ccusage;
@@ -40,23 +43,4 @@ pub struct DailyByProfile {
     pub tool_calls: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Default)]
-pub struct SessionLive {
-    pub session_id: Option<String>,
-    pub project_path: Option<String>,
-    pub tokens_in: u64,
-    pub tokens_out: u64,
-    pub cache_hit_pct: Option<f64>,
-    pub est_cost_usd: f64,
-    pub source: SessionLiveSource,
-}
 
-#[derive(Debug, Clone, Copy, Serialize, Default, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum SessionLiveSource {
-    /// Reserved for the jsonl tailer (Phase F follow-up).
-    #[allow(dead_code)]
-    Jsonl,
-    #[default]
-    CcusageOnly,
-}

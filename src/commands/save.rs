@@ -7,7 +7,6 @@ use crate::lock::CsLock;
 use crate::output::OutputOpts;
 use crate::paths::Paths;
 use crate::profile::OauthCreds;
-use crate::provider;
 
 pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &SaveArgs) -> Result<()> {
     let canonical = keychain::canonical_account();
@@ -55,7 +54,6 @@ pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &SaveArg
         }
         let opts = OutputOpts {
             json: global.json,
-            no_color: global.no_color,
         };
         crate::output::emit(opts, &plan)?;
         return Ok(());
@@ -65,23 +63,14 @@ pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &SaveArg
     let mut manifest = Manifest::new("save");
 
     let canonical_blob = canonical_blob.expect("checked above");
-    kc.write(&target, &canonical_blob)?;
-    match kc.read(&target) {
-        Ok(roundtrip) if roundtrip == canonical_blob => {}
-        Ok(_) | Err(_) => {
-            let _ = kc.delete(&target);
-            return Err(Error::Other(format!(
-                "Keychain write verification failed for {target}; rolled back"
-            )));
-        }
-    }
+    keychain::write_verified(kc, &target, &canonical_blob)?;
     manifest.push(BackupAction::KeychainReplace {
         account: target.clone(),
         before_b64: None,
         after_b64: Some(crate::backup::b64(&canonical_blob)),
     });
     if let Some(settings) = claude_settings.as_deref() {
-        provider::write_path_atomic(&paths.profile_claude_settings(&args.name), settings)?;
+        crate::jsonio::atomic_write_bytes(&paths.profile_claude_settings(&args.name), settings)?;
     }
 
     if let Err(e) = manifest.write(paths) {

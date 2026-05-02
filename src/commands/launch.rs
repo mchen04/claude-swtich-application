@@ -40,7 +40,6 @@ pub fn run_provider(
         });
         let opts = OutputOpts {
             json: global.json,
-            no_color: global.no_color,
         };
         return emit(opts, &plan);
     }
@@ -96,7 +95,6 @@ fn shell_with_env(global: &GlobalOpts, env: Vec<(String, String)>, print_env: bo
         return emit_text(
             OutputOpts {
                 json: false,
-                no_color: global.no_color,
             },
             &report,
         );
@@ -112,7 +110,6 @@ fn shell_with_env(global: &GlobalOpts, env: Vec<(String, String)>, print_env: bo
         });
         let opts = OutputOpts {
             json: global.json,
-            no_color: global.no_color,
         };
         return emit(opts, &plan);
     }

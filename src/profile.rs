@@ -1,5 +1,3 @@
-#![allow(dead_code)] // exercised starting Phase B (list/status)
-
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};

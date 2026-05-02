@@ -11,14 +11,12 @@ use crate::profile::{human_expiry, ProfileSummary};
 use crate::state::State;
 use crate::usage::{
     ccusage::CcusageClient, session_tags, stats_cache, ActiveBlock, DailyByProfile, DailyTotal,
-    SessionLive,
 };
 
 #[derive(Debug, Serialize)]
 pub struct DashboardSnapshot {
     pub active: Option<ProfileSummary>,
     pub profiles: Vec<ProfileSummary>,
-    pub session: Option<SessionLive>,
     pub active_block: Option<ActiveBlock>,
     pub today_total: Option<DailyTotal>,
     pub today_by_profile: Vec<DailyByProfile>,
@@ -106,7 +104,6 @@ pub fn snapshot(
     Ok(DashboardSnapshot {
         active,
         profiles: list_report.profiles,
-        session: None, // Phase F: live session tail is deferred — see plan §risks.
         active_block,
         today_total,
         today_by_profile,

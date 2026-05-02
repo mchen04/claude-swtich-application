@@ -53,7 +53,6 @@ pub fn run(
         }
         let opts = OutputOpts {
             json: global.json,
-            no_color: global.no_color,
         };
         crate::output::emit(opts, &plan)?;
         return Ok(());
@@ -219,14 +218,7 @@ fn atomic_replace(src: &Path, dst: &Path) -> Result<()> {
 }
 
 fn write_bytes_atomic(dst: &Path, bytes: &[u8]) -> Result<()> {
-    let parent = dst
-        .parent()
-        .ok_or_else(|| Error::Other(format!("settings dst has no parent: {}", dst.display())))?;
-    fs::create_dir_all(parent).map_err(|e| Error::io_at(parent, e))?;
-    let tmp = parent.join(format!(".cs-settings.{}.tmp", std::process::id()));
-    fs::write(&tmp, bytes).map_err(|e| Error::io_at(&tmp, e))?;
-    fs::rename(&tmp, dst).map_err(|e| Error::io_at(dst, e))?;
-    Ok(())
+    crate::jsonio::atomic_write_bytes(dst, bytes)
 }
 
 fn running_claude_processes() -> usize {

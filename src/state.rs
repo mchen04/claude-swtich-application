@@ -1,5 +1,3 @@
-#![allow(dead_code)] // active/previous fields used starting Phase C
-
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};

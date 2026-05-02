@@ -1,7 +1,6 @@
 use std::fmt;
 use std::path::PathBuf;
 use std::process::Command;
-use std::time::SystemTime;
 
 use serde::Serialize;
 
@@ -17,7 +16,6 @@ pub struct DoctorReport {
     pub tooling: Vec<ToolCheck>,
     pub keychain: KeychainReport,
     pub master: MasterStatus,
-    pub clock_skew_secs: i64,
     pub generated_at: String,
 }
 
@@ -106,12 +104,6 @@ pub fn run(paths: &Paths, kc: &dyn Keychain) -> Result<DoctorReport> {
     let state = State::load(&paths.state_file()).unwrap_or_default();
     let master = master::status(paths, &state)?;
 
-    let clock_skew_secs = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
-        - sntp_skew_placeholder();
-
     let generated_at = chrono::Utc::now().to_rfc3339();
 
     Ok(DoctorReport {
@@ -119,7 +111,6 @@ pub fn run(paths: &Paths, kc: &dyn Keychain) -> Result<DoctorReport> {
         tooling,
         keychain,
         master,
-        clock_skew_secs,
         generated_at,
     })
 }
@@ -239,16 +230,6 @@ fn backend_name() -> &'static str {
     } else {
         "mock"
     }
-}
-
-fn sntp_skew_placeholder() -> i64 {
-    // We don't actually contact a time server: clock skew vs Anthropic happens at
-    // OAuth refresh time. This field exists so future work can plug in an SNTP probe
-    // without changing the report contract.
-    SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
 }
 
 impl fmt::Display for DoctorReport {

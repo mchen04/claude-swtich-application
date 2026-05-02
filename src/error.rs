@@ -1,5 +1,3 @@
-#![allow(dead_code)] // error variants exercised across all phases
-
 use std::io;
 use std::path::PathBuf;
 
@@ -47,9 +45,6 @@ pub enum Error {
     #[error("operation refused: {0}")]
     Refused(String),
 
-    #[error("no master profile designated")]
-    NoMasterProfile,
-
     #[error("`{0}` is the master profile; run `cs master --unset` first")]
     MasterProfileLocked(String),
 
@@ -65,7 +60,4 @@ impl Error {
         }
     }
 
-    pub fn other(msg: impl Into<String>) -> Self {
-        Self::Other(msg.into())
-    }
 }

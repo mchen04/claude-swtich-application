@@ -1,4 +1,5 @@
-#![allow(dead_code)] // keychain trait surface exercised across phases
+//! Keychain abstraction: macOS Keychain via `security-framework` plus an in-memory
+//! mock for tests. All credential reads/writes go through the `Keychain` trait.
 
 use std::env;
 
@@ -27,11 +28,31 @@ pub fn is_profile_account(account: &str) -> bool {
     account.starts_with(PROFILE_PREFIX)
 }
 
+/// Abstraction over the macOS Keychain (or an in-memory mock for tests).
 pub trait Keychain: Send + Sync {
+    /// Read the secret bytes for the given account.
     fn read(&self, account: &str) -> Result<Vec<u8>>;
+    /// Write secret bytes for the given account.
     fn write(&self, account: &str, secret: &[u8]) -> Result<()>;
+    /// Remove the given account.
     fn delete(&self, account: &str) -> Result<()>;
+    /// List all accounts under the `Claude Code-credentials` service.
     fn list(&self) -> Result<Vec<String>>;
+}
+
+/// Write `secret` to `account` and verify the round-trip matches. On mismatch the
+/// entry is deleted so we don't leave a partially-written blob.
+pub fn write_verified(kc: &dyn Keychain, account: &str, secret: &[u8]) -> Result<()> {
+    kc.write(account, secret)?;
+    match kc.read(account) {
+        Ok(roundtrip) if roundtrip == secret => Ok(()),
+        Ok(_) | Err(_) => {
+            let _ = kc.delete(account);
+            Err(crate::error::Error::Other(format!(
+                "Keychain write verification failed for {account}; rolled back"
+            )))
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]

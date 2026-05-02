@@ -78,23 +78,3 @@ pub fn load_codex_summary(path: &Path) -> Result<CodexProfileSummary> {
     })
 }
 
-pub fn write_path_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
-    write_blob_atomic(path, bytes)
-}
-
-fn write_blob_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| Error::other(format!("path has no parent: {}", path.display())))?;
-    fs::create_dir_all(parent).map_err(|e| Error::io_at(parent, e))?;
-    let tmp = parent.join(format!(".cs.tmp.{}.{}", std::process::id(), now_nanos()));
-    fs::write(&tmp, bytes).map_err(|e| Error::io_at(&tmp, e))?;
-    fs::rename(&tmp, path).map_err(|e| Error::io_at(path, e))
-}
-
-fn now_nanos() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
-}

@@ -1,3 +1,6 @@
+//! Shell wrapper injection for zsh and bash. Manages the `cs` block in rc files
+//! and provides snippet generation for `cs setup` / `cs uninstall`.
+
 use std::path::PathBuf;
 
 use crate::cli::ShellChoice;
@@ -51,22 +54,28 @@ impl Shell {
     }
 }
 
-/// Replace any existing `# >>> cs ... # <<< cs` block with `body`, or append it if absent.
+/// Replace any existing `begin ... end` block with `body`, or append it if absent.
 /// Returns the new file contents.
 pub fn upsert_block(existing: &str, body: &str) -> String {
-    if let (Some(start), Some(end)) = (existing.find(BEGIN_MARKER), existing.find(END_MARKER)) {
-        if start < end {
-            let end_line = existing[end..]
+    upsert_block_named(existing, BEGIN_MARKER, END_MARKER, body)
+}
+
+/// Replace any existing `begin ... end` block with `body`, or append it if absent.
+/// Returns the new file contents.
+pub fn upsert_block_named(existing: &str, begin: &str, end: &str, body: &str) -> String {
+    if let (Some(start), Some(stop)) = (existing.find(begin), existing.find(end)) {
+        if start < stop {
+            let end_line = existing[stop..]
                 .find('\n')
-                .map(|n| end + n + 1)
+                .map(|n| stop + n + 1)
                 .unwrap_or(existing.len());
             let mut out = String::with_capacity(existing.len());
             out.push_str(&existing[..start]);
-            out.push_str(BEGIN_MARKER);
+            out.push_str(begin);
             out.push('\n');
             out.push_str(body.trim_end_matches('\n'));
             out.push('\n');
-            out.push_str(END_MARKER);
+            out.push_str(end);
             out.push('\n');
             out.push_str(&existing[end_line..]);
             return out;
@@ -78,11 +87,11 @@ pub fn upsert_block(existing: &str, body: &str) -> String {
         out.push('\n');
     }
     out.push('\n');
-    out.push_str(BEGIN_MARKER);
+    out.push_str(begin);
     out.push('\n');
     out.push_str(body.trim_end_matches('\n'));
     out.push('\n');
-    out.push_str(END_MARKER);
+    out.push_str(end);
     out.push('\n');
     out
 }

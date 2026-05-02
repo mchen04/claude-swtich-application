@@ -27,11 +27,10 @@ pub fn run(_paths: &Paths, global: &GlobalOpts, args: &UsageArgs) -> Result<()> 
     if global.json {
         emit_json(&report)?;
     } else {
-        emit_text(
-            OutputOpts {
-                json: false,
-                no_color: global.no_color,
-            },
+            emit_text(
+                OutputOpts {
+                    json: false,
+                },
             &TextReport(&report),
         )?;
     }

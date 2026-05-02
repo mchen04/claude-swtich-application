@@ -26,7 +26,6 @@ pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts) -> Result<()> 
     } else {
         let opts = OutputOpts {
             json: false,
-            no_color: global.no_color,
         };
         emit(opts, &report)?;
     }
@@ -64,15 +63,16 @@ pub fn build(paths: &Paths, kc: &dyn Keychain) -> Result<ListReport> {
     let mut profiles = Vec::new();
     for name in names {
         let account = keychain::profile_account(&name);
-        let mut summary = match kc.read(&account) {
-            Ok(bytes) => match OauthCreds::parse(&bytes) {
+        let claude_blob = kc.read(&account);
+        let mut summary = match &claude_blob {
+            Ok(bytes) => match OauthCreds::parse(bytes) {
                 Ok(creds) => ProfileSummary::from_creds(&name, &creds),
                 Err(_) => ProfileSummary::unknown(&name),
             },
             Err(_) => ProfileSummary::unknown(&name),
         };
         summary.providers.clear();
-        if kc.read(&account).is_ok() {
+        if claude_blob.is_ok() {
             summary.providers.push("claude".to_string());
         }
         if paths

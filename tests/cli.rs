@@ -129,11 +129,6 @@ fn doctor_text_runs_in_isolated_env() {
 }
 
 #[test]
-fn tui_stub_prints_friendly_message() {
-    cs().arg("tui").assert().success();
-}
-
-#[test]
 fn unknown_name_errors_with_not_found() {
     let (_dir, claude_home, cs_home) = isolated();
     cs().env("CLAUDE_HOME", &claude_home)

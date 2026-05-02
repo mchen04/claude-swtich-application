@@ -5,7 +5,7 @@ use crate::error::{Error, Result};
 use crate::keychain::{self, Keychain};
 use crate::paths::{Paths, SHARED_ITEMS};
 use crate::profile::OauthCreds;
-use crate::provider::{self, Provider};
+use crate::provider::Provider;
 use crate::symlinks;
 
 #[derive(Debug, Clone)]
@@ -196,7 +196,7 @@ pub fn ensure_codex_home(paths: &Paths, name: &str) -> Result<PathBuf> {
 
 fn copy_into_home(src: &Path, dst: &Path) -> Result<()> {
     let bytes = fs::read(src).map_err(|e| Error::io_at(src, e))?;
-    provider::write_path_atomic(dst, &bytes)
+    crate::jsonio::atomic_write_bytes(dst, &bytes)
 }
 
 fn ensure_symlink(target: &Path, link: &Path) -> Result<()> {

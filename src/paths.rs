@@ -1,16 +1,16 @@
-#![allow(dead_code)] // path helpers wired up incrementally across Phase B–E
-
 use std::env;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::error::{Error, Result};
 
 /// Paths shared across profiles via the master profile's symlinks.
 pub const SHARED_ITEMS: &[&str] = &["skills", "commands", "agents", "CLAUDE.md"];
 
+/// Central registry of all filesystem paths used by `cs`. All paths are derived from
+/// environment variables (`CLAUDE_HOME`, `CS_HOME`, `CODEX_HOME`) with sensible defaults
+/// so tests can redirect every filesystem touch into a temp directory.
 #[derive(Debug, Clone)]
 pub struct Paths {
-    pub home: PathBuf,
     pub claude_home: PathBuf,
     pub codex_home: PathBuf,
     pub cs_home: PathBuf,
@@ -18,6 +18,7 @@ pub struct Paths {
 }
 
 impl Paths {
+    /// Resolve all paths from environment variables or platform defaults.
     pub fn from_env() -> Result<Self> {
         let home = match env::var_os("HOME") {
             Some(v) => PathBuf::from(v),
@@ -42,7 +43,6 @@ impl Paths {
             .unwrap_or_else(|| home.join(".config").join("claude-switch").join("config"));
 
         Ok(Self {
-            home,
             claude_home,
             codex_home,
             cs_home,
@@ -132,7 +132,4 @@ impl Paths {
         Ok(())
     }
 
-    pub fn relative_to_home<'a>(&self, p: &'a Path) -> &'a Path {
-        p.strip_prefix(&self.home).unwrap_or(p)
-    }
 }

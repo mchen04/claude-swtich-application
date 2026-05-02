@@ -1,3 +1,5 @@
+//! Command handlers — one module per `cs` subcommand.
+
 pub mod alias;
 pub mod dashboard;
 pub mod default;
@@ -15,7 +17,6 @@ pub mod save;
 pub mod setup;
 pub mod status;
 pub mod switch;
-pub mod tui;
 pub mod uninstall;
 pub mod usage;
 pub mod wrapper;

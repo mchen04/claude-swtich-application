@@ -17,7 +17,6 @@ pub fn run(
     } else {
         let opts = OutputOpts {
             json: false,
-            no_color: global.no_color,
         };
         crate::output::emit(opts, &report)?;
     }

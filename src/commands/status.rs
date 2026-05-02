@@ -30,7 +30,6 @@ pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &StatusA
     } else {
         let opts = OutputOpts {
             json: false,
-            no_color: global.no_color,
         };
         emit(opts, &report)?;
     }

@@ -15,7 +15,6 @@ pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts) -> Result<()> 
         emit_text(
             OutputOpts {
                 json: false,
-                no_color: global.no_color,
             },
             &snap,
         )?;

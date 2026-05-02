@@ -1,3 +1,8 @@
+//! `cs` — Claude Code account switcher with master-profile sharing.
+//!
+//! Entry point: parses CLI arguments, rewrites bare invocations like `cs <name>`
+//! into explicit subcommands, then dispatches to the appropriate command handler.
+
 mod backup;
 mod cli;
 mod commands;
@@ -75,7 +80,6 @@ fn dispatch(paths: &Paths, kc: &dyn Keychain, cli: &Cli) -> Result<()> {
         Some(Command::Link(a)) => commands::link::link(paths, &cli.global, a),
         Some(Command::Links) => commands::link::list(paths, &cli.global),
         Some(Command::Uninstall(a)) => commands::uninstall::run(paths, &cli.global, a),
-        Some(Command::Tui) => commands::tui::run(),
         Some(Command::Claude(a)) => commands::provider::run_claude(paths, kc, &cli.global, a),
         Some(Command::Codex(a)) => commands::provider::run_codex(paths, kc, &cli.global, a),
         Some(Command::Switch(a)) => {

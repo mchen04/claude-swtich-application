@@ -1,5 +1,3 @@
-#![allow(dead_code)] // dry-run actions plumbed in starting Phase C
-
 use std::fmt;
 use std::path::PathBuf;
 
@@ -10,8 +8,6 @@ use serde::Serialize;
 pub enum Action {
     Move { from: PathBuf, to: PathBuf },
     Copy { from: PathBuf, to: PathBuf },
-    Symlink { target: PathBuf, link: PathBuf },
-    RemoveSymlink { link: PathBuf },
     WriteFile { path: PathBuf, bytes: usize },
     KeychainWrite { account: String, bytes: usize },
     KeychainDelete { account: String },
@@ -33,9 +29,6 @@ impl Plan {
         self.actions.push(a);
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.actions.is_empty()
-    }
 }
 
 impl fmt::Display for Plan {
@@ -52,10 +45,6 @@ impl fmt::Display for Plan {
                 Action::Copy { from, to } => {
                     writeln!(f, "copy    {} -> {}", from.display(), to.display())?
                 }
-                Action::Symlink { target, link } => {
-                    writeln!(f, "symlink {} -> {}", link.display(), target.display())?
-                }
-                Action::RemoveSymlink { link } => writeln!(f, "rm-link {}", link.display())?,
                 Action::WriteFile { path, bytes } => {
                     writeln!(f, "write   {} ({} bytes)", path.display(), bytes)?
                 }

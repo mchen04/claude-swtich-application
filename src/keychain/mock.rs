@@ -14,10 +14,6 @@ pub struct MockKeychain {
 }
 
 impl MockKeychain {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     pub fn shared() -> SharedMockKeychain {
         SharedMockKeychain::default()
     }

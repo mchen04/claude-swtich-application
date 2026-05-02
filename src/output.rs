@@ -1,5 +1,3 @@
-#![allow(dead_code)] // emit_json used now; emit() reserved for later phases
-
 use std::fmt::Display;
 use std::io::{self, Write};
 
@@ -10,7 +8,6 @@ use crate::error::Result;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct OutputOpts {
     pub json: bool,
-    pub no_color: bool,
 }
 
 pub fn emit<T: Serialize + Display>(opts: OutputOpts, value: &T) -> Result<()> {

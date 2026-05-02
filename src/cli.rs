@@ -85,8 +85,6 @@ pub enum Command {
     Links,
     /// Remove cs from the system (symlinks, wrapper, optionally master).
     Uninstall(UninstallArgs),
-    /// Launch the Ratatui usage TUI.
-    Tui,
     /// Claude-specific profile operations.
     Claude(ClaudeArgs),
     /// Codex-specific profile operations.
@@ -324,7 +322,6 @@ pub const KNOWN_SUBCOMMANDS: &[&str] = &[
     "link",
     "links",
     "uninstall",
-    "tui",
     "claude",
     "codex",
     "help",

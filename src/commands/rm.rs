@@ -36,7 +36,6 @@ pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &NameArg
         }
         let opts = OutputOpts {
             json: global.json,
-            no_color: global.no_color,
         };
         crate::output::emit(opts, &plan)?;
         return Ok(());

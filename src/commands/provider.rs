@@ -108,11 +108,10 @@ fn list_codex(paths: &Paths, global: &GlobalOpts) -> Result<()> {
     if global.json {
         emit_json(&report)
     } else {
-        emit_text(
-            OutputOpts {
-                json: false,
-                no_color: global.no_color,
-            },
+            emit_text(
+                OutputOpts {
+                    json: false,
+                },
             &CodexListText(&report),
         )
     }
@@ -153,11 +152,10 @@ fn status_codex(paths: &Paths, global: &GlobalOpts, args: &StatusArgs) -> Result
     if global.json {
         emit_json(&report)
     } else {
-        emit_text(
-            OutputOpts {
-                json: false,
-                no_color: global.no_color,
-            },
+            emit_text(
+                OutputOpts {
+                    json: false,
+                },
             &CodexStatusText(&report),
         )
     }
@@ -175,7 +173,6 @@ fn init_codex(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &Name
         return emit(
             OutputOpts {
                 json: global.json,
-                no_color: global.no_color,
             },
             &plan,
         );
@@ -217,7 +214,6 @@ fn login_codex(
         return emit(
             OutputOpts {
                 json: global.json,
-                no_color: global.no_color,
             },
             &plan,
         );

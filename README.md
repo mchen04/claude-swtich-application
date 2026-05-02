@@ -156,7 +156,7 @@ Keychain entries:
 ## Dev
 
 ```bash
-cargo test                            # 21 integration + 13 unit tests
+cargo test                            # 32 integration + unit tests
 cargo clippy --all-targets -- -D warnings
 cargo build --release
 ```
@@ -172,7 +172,7 @@ via `CS_TEST_KEYCHAIN=1` and `CS_TEST_KEYCHAIN_FIXTURE=/path/to/fixture.json`.
 - [x] Phase C — save/rm/rename/default/switch/`-`/refresh/setup/alias/migrate
 - [x] Phase D — master profile designation + uninstall (byte-clean roundtrip)
 - [x] Phase E — ccusage data layer, dashboard, `cs link`/`cs links`
-- [ ] Phase F — Ratatui TUI on top of the Phase E data structs
+- [ ] Phase F — Ratatui TUI (stub removed; deferred)
 - [ ] Phase G — cwd auto-switch precmd hook, expiry/quota notifications, `cs audit`, `cs revert`
 - [ ] Phase H — `cs export`/`cs import` with `age`, Linux secret-service backend, brew tap
 
