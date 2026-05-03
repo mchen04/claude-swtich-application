@@ -252,8 +252,9 @@ fn condense_err(msg: &str) -> String {
         .unwrap_or(msg)
         .trim()
         .to_string();
-    if trimmed.len() > 160 {
-        format!("{}…", &trimmed[..160])
+    if trimmed.chars().count() > 160 {
+        let head: String = trimmed.chars().take(160).collect();
+        format!("{head}…")
     } else {
         trimmed
     }
@@ -337,6 +338,18 @@ mod tests {
         assert_eq!(fmt_age(125), "2m05s");
         assert_eq!(fmt_age(3_600), "1h00m");
         assert_eq!(fmt_age(3_725), "1h02m");
+    }
+
+    #[test]
+    fn condense_err_truncates_on_char_boundary() {
+        let mut input = "a".repeat(159);
+        input.push('🚀');
+        input.push_str("tail");
+        let out = condense_err(&input);
+        assert!(out.ends_with('…'));
+        assert_eq!(out.chars().count(), 161);
+        let short = "ok";
+        assert_eq!(condense_err(short), "ok");
     }
 
     #[test]
