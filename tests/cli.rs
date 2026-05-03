@@ -681,6 +681,67 @@ fn status_no_active_json_shape() {
 // --- usage % view -------------------------------------------------------------
 
 #[test]
+fn save_rejects_path_traversal_name() {
+    let (dir, claude_home, cs_home) = isolated();
+    let blob = fake_oauth("primary@example.com", 3600);
+    let fixture = fixture_path(dir.path(), &[("test-user", &blob)]);
+
+    phase_c_env(&claude_home, &cs_home, &fixture)
+        .args(["save", "foo/bar"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid profile name"));
+}
+
+#[test]
+fn save_rejects_dotfile_name() {
+    let (dir, claude_home, cs_home) = isolated();
+    let blob = fake_oauth("primary@example.com", 3600);
+    let fixture = fixture_path(dir.path(), &[("test-user", &blob)]);
+
+    phase_c_env(&claude_home, &cs_home, &fixture)
+        .args(["save", ".dotfile"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid profile name"));
+}
+
+#[test]
+fn rm_refuses_to_delete_through_symlinked_profile_dir() {
+    let (dir, claude_home, cs_home) = isolated();
+    let blob = fake_oauth("primary@example.com", 3600);
+    let fixture = fixture_path(
+        dir.path(),
+        &[
+            ("test-user", &blob),
+            ("Claude Code-credentials-sneaky", &blob),
+        ],
+    );
+
+    // Plant a real directory somewhere outside cs_home, then symlink the
+    // profile dir to it. `cs rm sneaky` must refuse rather than chase
+    // the symlink and `rm -rf` the real target.
+    let outside = dir.path().join("outside-target");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("important.txt"), b"do not delete").unwrap();
+
+    let profiles = cs_home.join("profiles");
+    std::fs::create_dir_all(&profiles).unwrap();
+    let link = profiles.join("sneaky");
+    std::os::unix::fs::symlink(&outside, &link).unwrap();
+
+    phase_c_env(&claude_home, &cs_home, &fixture)
+        .args(["rm", "sneaky"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("symlink"));
+
+    assert!(outside.join("important.txt").exists(),
+        "rm chased a symlink and deleted the real target");
+    assert!(link.exists(), "symlink itself should be intact");
+}
+
+#[test]
 fn refresh_kills_claude_after_timeout() {
     let (dir, claude_home, cs_home) = isolated();
     let blob = fake_oauth("work@example.com", 3600);

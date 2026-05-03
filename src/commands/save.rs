@@ -6,6 +6,7 @@ use crate::paths::Paths;
 use crate::profile::OauthCreds;
 
 pub fn run(paths: &Paths, kc: &dyn Keychain, _global: &GlobalOpts, args: &SaveArgs) -> Result<()> {
+    crate::paths::validate_profile_name(&args.name)?;
     let canonical = keychain::canonical_account();
     let target = keychain::profile_account(&args.name);
 

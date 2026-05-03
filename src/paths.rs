@@ -80,3 +80,20 @@ impl Paths {
         Ok(())
     }
 }
+
+pub fn validate_profile_name(name: &str) -> Result<()> {
+    if name.is_empty() {
+        return Err(Error::InvalidArgument("profile name is empty".into()));
+    }
+    if name.starts_with('.')
+        || name.contains('/')
+        || name.contains('\\')
+        || name == ".."
+        || name.contains('\0')
+    {
+        return Err(Error::InvalidArgument(format!(
+            "invalid profile name `{name}`: must not contain `/`, `\\`, `\\0`, or start with `.`"
+        )));
+    }
+    Ok(())
+}

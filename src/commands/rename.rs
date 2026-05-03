@@ -19,6 +19,7 @@ pub fn run(
             "source and target are the same".into(),
         ));
     }
+    crate::paths::validate_profile_name(&args.to)?;
 
     let _lock = CsLock::acquire(paths)?;
 

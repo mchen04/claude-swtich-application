@@ -25,6 +25,14 @@ pub fn run(paths: &Paths, kc: &dyn Keychain, _global: &GlobalOpts, args: &NameAr
         kc.delete(&target)?;
     }
     if has_profile_dir {
+        let meta = std::fs::symlink_metadata(&profile_dir)
+            .map_err(|e| Error::io_at(&profile_dir, e))?;
+        if meta.file_type().is_symlink() {
+            return Err(Error::Refused(format!(
+                "{} is a symlink; refusing to delete (remove it manually if intentional)",
+                profile_dir.display()
+            )));
+        }
         std::fs::remove_dir_all(&profile_dir).map_err(|e| Error::io_at(&profile_dir, e))?;
     }
 
