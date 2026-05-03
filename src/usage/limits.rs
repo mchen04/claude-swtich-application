@@ -45,6 +45,10 @@ pub struct LimitsOutcome {
     pub limits: UsageLimits,
     /// True when the live fetch failed with 429 and we served past-TTL cache.
     pub stale: bool,
+    /// Unix seconds when the underlying data was actually pulled from the API.
+    /// On a 429-served-stale, this is the original fetch time, not the bumped
+    /// disk timestamp — so callers can show real data age, not "we tried again."
+    pub data_fetched_at_unix: u64,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -76,10 +80,12 @@ pub fn fetch_for(
             "expired" => Err(LimitsError::TokenExpired(profile.to_string())),
             "rate_limited" => match read_cache(paths, profile) {
                 Some(cache) => {
+                    let data_fetched_at_unix = cache.fetched_at_unix;
                     write_cache(paths, profile, &cache.payload);
                     Ok(LimitsOutcome {
                         limits: cache.payload,
                         stale: true,
+                        data_fetched_at_unix,
                     })
                 }
                 None => Err(LimitsError::RateLimited),
@@ -93,6 +99,7 @@ pub fn fetch_for(
         return Ok(LimitsOutcome {
             limits: payload,
             stale: false,
+            data_fetched_at_unix: now_unix(),
         });
     }
 
@@ -101,6 +108,7 @@ pub fn fetch_for(
             return Ok(LimitsOutcome {
                 limits: cache.payload,
                 stale: false,
+                data_fetched_at_unix: cache.fetched_at_unix,
             });
         }
     }
@@ -116,6 +124,7 @@ pub fn fetch_for(
             Ok(LimitsOutcome {
                 limits: payload,
                 stale: false,
+                data_fetched_at_unix: now_unix(),
             })
         }
         Err(LimitsError::RateLimited) => match read_cache(paths, profile) {
@@ -125,16 +134,25 @@ pub fn fetch_for(
                 // payload, fresh timestamp; the next attempt waits for the
                 // TTL again — matters because a sustained 429 can lock the
                 // endpoint out for 30+ minutes.
+                let data_fetched_at_unix = cache.fetched_at_unix;
                 write_cache(paths, profile, &cache.payload);
                 Ok(LimitsOutcome {
                     limits: cache.payload,
                     stale: true,
+                    data_fetched_at_unix,
                 })
             }
             None => Err(LimitsError::RateLimited),
         },
         Err(e) => Err(e),
     }
+}
+
+fn now_unix() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 fn http_get_limits(token: &str) -> Result<UsageLimits, LimitsError> {

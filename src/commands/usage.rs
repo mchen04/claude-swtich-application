@@ -22,6 +22,12 @@ struct UsageReport {
     generated_at: String,
     rows: Vec<UsageRow>,
     warnings: Vec<String>,
+    /// Oldest data fetch among the rendered profiles (unix seconds). `None` when
+    /// every row errored before we could resolve a payload.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data_fetched_at_unix: Option<u64>,
+    /// True when at least one row is being served from past-TTL cache (429).
+    data_stale: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -61,6 +67,8 @@ fn build(paths: &Paths, kc: &dyn Keychain, max_age: Duration) -> Result<UsageRep
     let listing = list::build(paths, kc)?;
     let mut warnings = Vec::new();
     let mut rows = Vec::new();
+    let mut oldest_fetch: Option<u64> = None;
+    let mut any_stale = false;
 
     for p in &listing.profiles {
         let mut row = UsageRow {
@@ -97,7 +105,12 @@ fn build(paths: &Paths, kc: &dyn Keychain, max_age: Duration) -> Result<UsageRep
                     l.seven_day_sonnet.as_ref().map(|b| pct_left(b.utilization));
                 row.weekly_opus_pct_left =
                     l.seven_day_opus.as_ref().map(|b| pct_left(b.utilization));
+                oldest_fetch = Some(match oldest_fetch {
+                    Some(prev) => prev.min(outcome.data_fetched_at_unix),
+                    None => outcome.data_fetched_at_unix,
+                });
                 if outcome.stale {
+                    any_stale = true;
                     warnings.push(format!(
                         "{}: rate-limited; showing cached values",
                         p.name
@@ -124,6 +137,8 @@ fn build(paths: &Paths, kc: &dyn Keychain, max_age: Duration) -> Result<UsageRep
         generated_at: now.to_rfc3339(),
         rows,
         warnings,
+        data_fetched_at_unix: oldest_fetch,
+        data_stale: any_stale,
     })
 }
 
@@ -148,15 +163,59 @@ fn run_watch(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts) -> Result<()
             let _ = stdout.execute(terminal::Clear(terminal::ClearType::FromCursorDown));
         }
         first = false;
+        let footer = render_footer(&report);
         if global.json {
             serde_json::to_writer_pretty(&mut stdout, &report)?;
-            writeln!(stdout, "\n(updated {})", chrono::Utc::now().to_rfc3339())?;
+            writeln!(stdout, "\n{footer}")?;
         } else {
             write!(stdout, "{}", TextReport { report: &report })?;
-            writeln!(stdout, "(updated {})", chrono::Utc::now().to_rfc3339())?;
+            writeln!(stdout, "{footer}")?;
         }
         stdout.flush().ok();
         std::thread::sleep(Duration::from_millis(1000));
+    }
+}
+
+fn render_footer(report: &UsageReport) -> String {
+    let Some(fetched) = report.data_fetched_at_unix else {
+        return String::new();
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(fetched);
+    let age = now.saturating_sub(fetched);
+    if report.data_stale {
+        return format!("(rate-limited · data {} old)", fmt_age(age));
+    }
+    let ttl = CACHE_MAX_AGE.as_secs();
+    let next = ttl.saturating_sub(age);
+    if next == 0 {
+        format!("(fetched {} ago · refreshing…)", fmt_age(age))
+    } else {
+        format!(
+            "(fetched {} ago · refreshes in {})",
+            fmt_age(age),
+            fmt_age(next)
+        )
+    }
+}
+
+fn fmt_age(secs: u64) -> String {
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3_600 {
+        let m = secs / 60;
+        let s = secs % 60;
+        if s == 0 {
+            format!("{m}m")
+        } else {
+            format!("{m}m{s:02}s")
+        }
+    } else {
+        let h = secs / 3_600;
+        let m = (secs % 3_600) / 60;
+        format!("{h}h{m:02}m")
     }
 }
 
@@ -267,6 +326,17 @@ mod tests {
         assert_eq!(pct_left(100.0), 0);
         assert_eq!(pct_left(250.0), 0);
         assert_eq!(pct_left(-5.0), 100);
+    }
+
+    #[test]
+    fn fmt_age_compact_buckets() {
+        assert_eq!(fmt_age(0), "0s");
+        assert_eq!(fmt_age(12), "12s");
+        assert_eq!(fmt_age(59), "59s");
+        assert_eq!(fmt_age(60), "1m");
+        assert_eq!(fmt_age(125), "2m05s");
+        assert_eq!(fmt_age(3_600), "1h00m");
+        assert_eq!(fmt_age(3_725), "1h02m");
     }
 
     #[test]
