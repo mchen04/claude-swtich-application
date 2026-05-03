@@ -15,16 +15,19 @@ and per-account configuration.
 
 ## Install
 
-macOS only.
+macOS only. Requires [Claude Code](https://docs.claude.com/en/docs/claude-code)
+already installed and logged in, and `~/.local/bin` (or your chosen
+`CS_INSTALL_DIR`) on your `PATH`.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mchen04/claude-swtich-application/main/install.sh | sh
 cs setup            # install the shell wrapper into ~/.zshrc
+cs doctor           # verify install
 ```
 
 The installer downloads the latest prebuilt binary for your arch
 (`aarch64`/`x86_64`) into `~/.local/bin/cs`. Set `CS_INSTALL_DIR=/somewhere`
-to install elsewhere. Make sure the install dir is on your `PATH`.
+to install elsewhere.
 
 ### From source
 
