@@ -14,7 +14,12 @@ use crate::profile::OauthCreds;
 
 const ENDPOINT: &str = "https://api.anthropic.com/api/oauth/usage";
 const OAUTH_BETA: &str = "oauth-2025-04-20";
-const CACHE_TTL: Duration = Duration::from_secs(300);
+/// Default max age for one-shot calls. 300s matches community guidance for the
+/// 429-prone `/api/oauth/usage` endpoint.
+pub const DEFAULT_MAX_AGE: Duration = Duration::from_secs(300);
+/// Tighter max age used by `cs usage --watch` so the % values actually move
+/// while the user works. 2 calls/min/profile stays well clear of 429s.
+pub const WATCH_MAX_AGE: Duration = Duration::from_secs(30);
 const TOKEN_LEEWAY: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,6 +69,7 @@ pub fn fetch_for(
     profile: &str,
     creds: &OauthCreds,
     paths: &Paths,
+    max_age: Duration,
 ) -> Result<LimitsOutcome, LimitsError> {
     if let Some(fail_mode) = test_fail_mode(profile) {
         return match fail_mode.as_str() {
@@ -88,7 +94,7 @@ pub fn fetch_for(
     }
 
     if let Some(cache) = read_cache(paths, profile) {
-        if cache_is_fresh(&cache) {
+        if cache_is_fresh(&cache, max_age) {
             return Ok(LimitsOutcome {
                 limits: cache.payload,
                 stale: false,
@@ -179,12 +185,12 @@ fn read_cache(paths: &Paths, profile: &str) -> Option<CacheFile> {
     serde_json::from_slice(&bytes).ok()
 }
 
-fn cache_is_fresh(cache: &CacheFile) -> bool {
+fn cache_is_fresh(cache: &CacheFile, max_age: Duration) -> bool {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    now.saturating_sub(cache.fetched_at_unix) < CACHE_TTL.as_secs()
+    now.saturating_sub(cache.fetched_at_unix) < max_age.as_secs()
 }
 
 fn write_cache(paths: &Paths, profile: &str, payload: &UsageLimits) {
@@ -253,12 +259,21 @@ mod tests {
                 seven_day_opus: None,
             },
         };
-        assert!(cache_is_fresh(&fresh));
+        assert!(cache_is_fresh(&fresh, DEFAULT_MAX_AGE));
 
         let stale = CacheFile {
-            fetched_at_unix: now.saturating_sub(CACHE_TTL.as_secs() + 5),
+            fetched_at_unix: now.saturating_sub(DEFAULT_MAX_AGE.as_secs() + 5),
             payload: fresh.payload.clone(),
         };
-        assert!(!cache_is_fresh(&stale));
+        assert!(!cache_is_fresh(&stale, DEFAULT_MAX_AGE));
+
+        // Same cache, tighter max_age (watch mode): a 60s-old entry is fresh
+        // under 300s but stale under 30s — forcing a re-fetch.
+        let aged = CacheFile {
+            fetched_at_unix: now.saturating_sub(60),
+            payload: fresh.payload.clone(),
+        };
+        assert!(cache_is_fresh(&aged, DEFAULT_MAX_AGE));
+        assert!(!cache_is_fresh(&aged, WATCH_MAX_AGE));
     }
 }

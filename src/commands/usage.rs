@@ -12,7 +12,10 @@ use crate::keychain::{self, Keychain};
 use crate::output::{emit_json, emit_text, OutputOpts};
 use crate::paths::Paths;
 use crate::profile::OauthCreds;
-use crate::usage::{limits, LimitsError};
+use crate::usage::{
+    limits::{self, DEFAULT_MAX_AGE, WATCH_MAX_AGE},
+    LimitsError,
+};
 
 #[derive(Debug, Serialize)]
 struct UsageReport {
@@ -44,7 +47,7 @@ pub fn run(
     if args.watch {
         return run_watch(paths, kc, global);
     }
-    let report = build(paths, kc)?;
+    let report = build(paths, kc, DEFAULT_MAX_AGE)?;
     if global.json {
         emit_json(&report)?;
     } else {
@@ -53,7 +56,7 @@ pub fn run(
     Ok(())
 }
 
-fn build(paths: &Paths, kc: &dyn Keychain) -> Result<UsageReport> {
+fn build(paths: &Paths, kc: &dyn Keychain, max_age: Duration) -> Result<UsageReport> {
     let now = Utc::now();
     let listing = list::build(paths, kc)?;
     let mut warnings = Vec::new();
@@ -83,7 +86,7 @@ fn build(paths: &Paths, kc: &dyn Keychain) -> Result<UsageReport> {
             }
         };
 
-        match limits::fetch_for(&p.name, &creds, paths) {
+        match limits::fetch_for(&p.name, &creds, paths, max_age) {
             Ok(outcome) => {
                 let l = &outcome.limits;
                 row.five_h_pct_left = Some(pct_left(l.five_hour.utilization));
@@ -137,7 +140,7 @@ fn run_watch(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts) -> Result<()
     let _ = stdout.execute(cursor::Hide);
     let mut first = true;
     loop {
-        let report = build(paths, kc)?;
+        let report = build(paths, kc, WATCH_MAX_AGE)?;
         if !first {
             let _ = stdout.execute(cursor::MoveToColumn(0));
             let _ = stdout.execute(terminal::Clear(terminal::ClearType::FromCursorDown));
