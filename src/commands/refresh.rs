@@ -1,5 +1,6 @@
-use std::process::Command;
-use std::time::Duration;
+use std::io::Read;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use crate::cli::{GlobalOpts, OptionalNameArg};
 use crate::error::{Error, Result};
@@ -55,20 +56,15 @@ pub fn run(
         ));
     }
 
-    let out = Command::new("claude").args(["/status"]).output();
-    match out {
-        Ok(o) if o.status.success() => {}
-        Ok(o) => {
-            rollback_canonical(kc, &canonical, prev_canonical.as_deref());
-            return Err(Error::Subprocess {
-                cmd: "claude /status".into(),
-                message: format!(
-                    "exit {}: {}",
-                    o.status.code().unwrap_or(-1),
-                    String::from_utf8_lossy(&o.stderr)
-                ),
-            });
-        }
+    const REFRESH_TIMEOUT: Duration = Duration::from_secs(60);
+
+    let mut child = match Command::new("claude")
+        .args(["/status"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
         Err(e) => {
             rollback_canonical(kc, &canonical, prev_canonical.as_deref());
             return Err(Error::Subprocess {
@@ -76,6 +72,50 @@ pub fn run(
                 message: e.to_string(),
             });
         }
+    };
+
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break s,
+            Ok(None) => {
+                if started.elapsed() > REFRESH_TIMEOUT {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    rollback_canonical(kc, &canonical, prev_canonical.as_deref());
+                    return Err(Error::Subprocess {
+                        cmd: "claude /status".into(),
+                        message: format!("timed out after {}s", REFRESH_TIMEOUT.as_secs()),
+                    });
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                rollback_canonical(kc, &canonical, prev_canonical.as_deref());
+                return Err(Error::Subprocess {
+                    cmd: "claude /status".into(),
+                    message: e.to_string(),
+                });
+            }
+        }
+    };
+
+    if !status.success() {
+        let mut stderr = Vec::new();
+        if let Some(mut s) = child.stderr.take() {
+            let _ = s.read_to_end(&mut stderr);
+        }
+        rollback_canonical(kc, &canonical, prev_canonical.as_deref());
+        return Err(Error::Subprocess {
+            cmd: "claude /status".into(),
+            message: format!(
+                "exit {}: {}",
+                status.code().unwrap_or(-1),
+                String::from_utf8_lossy(&stderr)
+            ),
+        });
     }
 
     let refreshed = kc.read(&canonical)?;

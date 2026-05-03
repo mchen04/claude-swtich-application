@@ -681,6 +681,50 @@ fn status_no_active_json_shape() {
 // --- usage % view -------------------------------------------------------------
 
 #[test]
+fn refresh_kills_claude_after_timeout() {
+    let (dir, claude_home, cs_home) = isolated();
+    let blob = fake_oauth("work@example.com", 3600);
+    let fixture = fixture_path(
+        dir.path(),
+        &[
+            ("test-user", &blob),
+            ("Claude Code-credentials-work", &blob),
+        ],
+    );
+
+    let bin_dir = dir.path().join("bin");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    let shim = bin_dir.join("claude");
+    std::fs::write(&shim, "#!/bin/sh\nsleep 9999\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&shim).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&shim, perms).unwrap();
+    }
+
+    // Prepend the shim dir so `claude` resolves to it; keep /bin and
+    // /usr/bin so the shim itself can find `sleep`.
+    let mut path = bin_dir.as_os_str().to_owned();
+    path.push(":/usr/bin:/bin");
+
+    let started = std::time::Instant::now();
+    phase_c_env(&claude_home, &cs_home, &fixture)
+        .env("PATH", &path)
+        .args(["refresh", "work"])
+        .timeout(std::time::Duration::from_secs(70))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("timed out"));
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(70),
+        "refresh did not bound the subprocess (took {:?})",
+        started.elapsed()
+    );
+}
+
+#[test]
 fn setup_refuses_when_rc_is_unreadable_and_leaves_it_intact() {
     // A `.zshrc` with invalid UTF-8 must abort `cs setup` with an error,
     // not silently overwrite the user's file with a blank wrapper.
