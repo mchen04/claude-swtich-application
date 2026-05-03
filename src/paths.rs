@@ -13,7 +13,6 @@ pub const SHARED_ITEMS: &[&str] = &["skills", "commands", "agents", "CLAUDE.md"]
 pub struct Paths {
     pub claude_home: PathBuf,
     pub cs_home: PathBuf,
-    pub config_file: PathBuf,
 }
 
 impl Paths {
@@ -34,14 +33,9 @@ impl Paths {
             .map(PathBuf::from)
             .unwrap_or_else(|| home.join(".claude-cs"));
 
-        let config_file = env::var_os("CS_CONFIG")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| home.join(".config").join("claude-switch").join("config"));
-
         Ok(Self {
             claude_home,
             cs_home,
-            config_file,
         })
     }
 
@@ -53,20 +47,8 @@ impl Paths {
         self.profiles_dir().join(name)
     }
 
-    pub fn profile_provider_dir(&self, name: &str, provider: &str) -> PathBuf {
-        self.profile_dir(name).join("providers").join(provider)
-    }
-
     pub fn profile_claude_settings(&self, name: &str) -> PathBuf {
         self.profile_dir(name).join("settings.json")
-    }
-
-    pub fn profile_provider_home(&self, name: &str, provider: &str) -> PathBuf {
-        self.profile_provider_dir(name, provider).join("home")
-    }
-
-    pub fn backups_dir(&self) -> PathBuf {
-        self.cs_home.join(".backups")
     }
 
     pub fn state_file(&self) -> PathBuf {
@@ -75,10 +57,6 @@ impl Paths {
 
     pub fn lock_file(&self) -> PathBuf {
         self.cs_home.join(".lock")
-    }
-
-    pub fn last_env_file(&self) -> PathBuf {
-        self.cs_home.join(".last-env")
     }
 
     pub fn active_profile_marker(&self) -> PathBuf {

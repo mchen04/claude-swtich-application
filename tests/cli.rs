@@ -1,6 +1,5 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
-use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
@@ -61,41 +60,15 @@ fn fake_oauth(email: &str, expires_in_secs: i64) -> String {
     .to_string()
 }
 
-fn fake_codex_auth(account_id: &str) -> String {
-    serde_json::json!({
-        "auth_mode": "chatgpt",
-        "OPENAI_API_KEY": "sk-test",
-        "tokens": {
-            "access_token": format!("acc-{account_id}"),
-            "refresh_token": format!("ref-{account_id}"),
-            "id_token": format!("id-{account_id}"),
-            "account_id": account_id
-        },
-        "last_refresh": "2026-04-30T00:00:00Z"
-    })
-    .to_string()
-}
-
-fn install_fake_bin(dir: &std::path::Path, name: &str, body: &str) -> PathBuf {
-    let bin_dir = dir.join("bin");
-    std::fs::create_dir_all(&bin_dir).unwrap();
-    let path = bin_dir.join(name);
-    std::fs::write(&path, body).unwrap();
-    let mut perms = std::fs::metadata(&path).unwrap().permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(&path, perms).unwrap();
-    path
-}
-
 #[test]
 fn shows_help() {
     cs().arg("--help")
         .assert()
         .success()
-        .stdout(predicate::str::contains(
-            "isolated Claude/Codex profile homes",
-        ))
-        .stdout(predicate::str::contains("doctor"));
+        .stdout(predicate::str::contains("Claude profile switching"))
+        .stdout(predicate::str::contains("doctor"))
+        .stdout(predicate::str::contains("master"))
+        .stdout(predicate::str::contains("usage"));
 }
 
 #[test]
@@ -180,7 +153,7 @@ fn status_no_active_text() {
         .stdout(predicate::str::contains("no active profile"));
 }
 
-// --- Phase C: switch + profile management round-trip --------------------------
+// --- switch + profile management round-trip -----------------------------------
 
 fn phase_c_env(
     claude_home: &std::path::Path,
@@ -189,20 +162,6 @@ fn phase_c_env(
 ) -> Command {
     let mut c = cs();
     c.env("CLAUDE_HOME", claude_home)
-        .env("CS_HOME", cs_home)
-        .env("CS_TEST_KEYCHAIN_FIXTURE", fixture);
-    c
-}
-
-fn phase_c_env_with_codex(
-    claude_home: &std::path::Path,
-    codex_home: &std::path::Path,
-    cs_home: &std::path::Path,
-    fixture: &std::path::Path,
-) -> Command {
-    let mut c = cs();
-    c.env("CLAUDE_HOME", claude_home)
-        .env("CODEX_HOME", codex_home)
         .env("CS_HOME", cs_home)
         .env("CS_TEST_KEYCHAIN_FIXTURE", fixture);
     c
@@ -393,7 +352,7 @@ fn default_then_default_go() {
     assert_eq!(state["default"], "a");
 }
 
-// --- Phase D: master profile ---------------------------------------------------
+// --- master profile -----------------------------------------------------------
 
 fn write_seed(claude_home: &std::path::Path) {
     std::fs::create_dir_all(claude_home.join("skills/foo")).unwrap();
@@ -702,22 +661,6 @@ fn master_unset_restores_claude_home() {
 }
 
 #[test]
-fn dry_run_save_does_not_mutate() {
-    let (dir, claude_home, cs_home) = isolated();
-    let blob = fake_oauth("a@example.com", 3600);
-    let fixture = fixture_path(dir.path(), &[("test-user", &blob)]);
-
-    phase_c_env(&claude_home, &cs_home, &fixture)
-        .args(["--dry-run", "save", "personal"])
-        .assert()
-        .success();
-
-    let after: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&fixture).unwrap()).unwrap();
-    assert!(after.get("Claude Code-credentials-personal").is_none());
-}
-
-#[test]
 fn status_no_active_json_shape() {
     let (_dir, claude_home, cs_home) = isolated();
     let output = cs()
@@ -735,244 +678,7 @@ fn status_no_active_json_shape() {
     }
 }
 
-#[test]
-fn codex_init_seeds_home_from_canonical_config() {
-    let (dir, claude_home, cs_home) = isolated();
-    let codex_home = dir.path().join("codex");
-    std::fs::create_dir_all(&codex_home).unwrap();
-    let fixture = fixture_path(dir.path(), &[]);
-
-    std::fs::write(codex_home.join("config.toml"), b"model = \"gpt-5\"\n").unwrap();
-    std::fs::create_dir_all(codex_home.join("skills/demo")).unwrap();
-    std::fs::write(codex_home.join("skills/demo/SKILL.md"), b"# demo\n").unwrap();
-
-    phase_c_env_with_codex(&claude_home, &codex_home, &cs_home, &fixture)
-        .args(["codex", "init", "work"])
-        .assert()
-        .success();
-
-    let profile_home = cs_home.join("profiles/work/providers/codex/home");
-    assert_eq!(
-        std::fs::read(profile_home.join("config.toml")).unwrap(),
-        b"model = \"gpt-5\"\n"
-    );
-    assert!(std::fs::symlink_metadata(profile_home.join("skills"))
-        .unwrap()
-        .file_type()
-        .is_symlink());
-}
-
-#[test]
-fn codex_login_uses_profile_home() {
-    let (dir, claude_home, cs_home) = isolated();
-    let codex_home = dir.path().join("codex");
-    std::fs::create_dir_all(&codex_home).unwrap();
-    let fixture = fixture_path(dir.path(), &[]);
-
-    phase_c_env_with_codex(&claude_home, &codex_home, &cs_home, &fixture)
-        .args(["codex", "init", "work"])
-        .assert()
-        .success();
-
-    install_fake_bin(
-        dir.path(),
-        "codex",
-        "#!/bin/sh\nprintf '%s\\n' \"$CODEX_HOME\"\ncat > \"$CODEX_HOME/auth.json\" <<'EOF'\n{\"auth_mode\":\"chatgpt\",\"tokens\":{\"account_id\":\"work-acct\",\"refresh_token\":\"ref-work\"},\"last_refresh\":\"2026-04-30T00:00:00Z\"}\nEOF\n",
-    );
-    let path = format!(
-        "{}:{}",
-        dir.path().join("bin").display(),
-        std::env::var("PATH").unwrap()
-    );
-
-    phase_c_env_with_codex(&claude_home, &codex_home, &cs_home, &fixture)
-        .env("PATH", path)
-        .args(["codex", "login", "work"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains(
-            cs_home
-                .join("profiles/work/providers/codex/home")
-                .display()
-                .to_string(),
-        ));
-
-    let auth: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(cs_home.join("profiles/work/providers/codex/home/auth.json")).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(auth["tokens"]["account_id"], "work-acct");
-}
-
-#[test]
-fn top_level_switch_leaves_canonical_codex_home_untouched() {
-    let (dir, claude_home, cs_home) = isolated();
-    let codex_home = dir.path().join("codex");
-    std::fs::create_dir_all(&codex_home).unwrap();
-    let work_blob = fake_oauth("work@example.com", 3600);
-    let personal_blob = fake_oauth("personal@example.com", 3600);
-    let fixture = fixture_path(
-        dir.path(),
-        &[
-            ("test-user", &work_blob),
-            ("Claude Code-credentials-personal", &personal_blob),
-            ("Claude Code-credentials-work", &work_blob),
-        ],
-    );
-    std::fs::write(
-        codex_home.join("auth.json"),
-        fake_codex_auth("canonical-acct"),
-    )
-    .unwrap();
-    std::fs::write(codex_home.join("config.toml"), b"model = \"canonical\"\n").unwrap();
-
-    phase_c_env_with_codex(&claude_home, &codex_home, &cs_home, &fixture)
-        .args(["personal"])
-        .assert()
-        .success();
-
-    let state: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(cs_home.join("state.json")).unwrap()).unwrap();
-    assert_eq!(state["active"], "personal");
-    assert_eq!(state["active_claude"], "personal");
-    assert!(state.get("active_codex").is_none() || state["active_codex"].is_null());
-
-    let canonical_codex: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(codex_home.join("auth.json")).unwrap()).unwrap();
-    assert_eq!(canonical_codex["tokens"]["account_id"], "canonical-acct");
-    assert_eq!(
-        std::fs::read(codex_home.join("config.toml")).unwrap(),
-        b"model = \"canonical\"\n"
-    );
-}
-
-#[test]
-fn shell_print_env_exports_isolated_homes() {
-    let (dir, claude_home, cs_home) = isolated();
-    let codex_home = dir.path().join("codex");
-    std::fs::create_dir_all(&codex_home).unwrap();
-    let blob = fake_oauth("work@example.com", 3600);
-    let fixture = fixture_path(dir.path(), &[("test-user", &blob)]);
-
-    std::fs::write(claude_home.join("settings.json"), b"{\"theme\":\"dark\"}\n").unwrap();
-    std::fs::write(codex_home.join("auth.json"), fake_codex_auth("work-acct")).unwrap();
-    std::fs::write(codex_home.join("config.toml"), b"model = \"work\"\n").unwrap();
-    std::fs::create_dir_all(codex_home.join("skills/demo")).unwrap();
-    std::fs::write(codex_home.join("skills/demo/SKILL.md"), b"# demo\n").unwrap();
-
-    phase_c_env_with_codex(&claude_home, &codex_home, &cs_home, &fixture)
-        .args(["codex", "init", "work"])
-        .assert()
-        .success();
-    phase_c_env_with_codex(&claude_home, &codex_home, &cs_home, &fixture)
-        .args(["save", "work"])
-        .assert()
-        .success();
-
-    let output = phase_c_env_with_codex(&claude_home, &codex_home, &cs_home, &fixture)
-        .args(["shell", "work", "--print-env"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let text = String::from_utf8(output).unwrap();
-    assert!(text.contains("CLAUDE_CONFIG_DIR"));
-    assert!(text.contains("CLAUDE_HOME"));
-    assert!(text.contains("CODEX_HOME"));
-}
-
-#[test]
-fn claude_run_uses_isolated_home() {
-    let (dir, claude_home, cs_home) = isolated();
-    let codex_home = dir.path().join("codex");
-    std::fs::create_dir_all(&codex_home).unwrap();
-    let blob = fake_oauth("work@example.com", 3600);
-    let fixture = fixture_path(dir.path(), &[("test-user", &blob)]);
-    std::fs::write(claude_home.join("settings.json"), b"{\"theme\":\"dark\"}\n").unwrap();
-    write_seed(&claude_home);
-
-    phase_c_env_with_codex(&claude_home, &codex_home, &cs_home, &fixture)
-        .args(["save", "work"])
-        .assert()
-        .success();
-
-    install_fake_bin(
-        dir.path(),
-        "claude",
-        "#!/bin/sh\nprintf '%s\\n' \"$CLAUDE_CONFIG_DIR\"\nprintf '%s\\n' \"$CLAUDE_HOME\"\ncat \"$CLAUDE_CONFIG_DIR/settings.json\"\nif [ -L \"$CLAUDE_CONFIG_DIR/skills\" ]; then echo linked; fi\n",
-    );
-    let path = format!(
-        "{}:{}",
-        dir.path().join("bin").display(),
-        std::env::var("PATH").unwrap()
-    );
-
-    phase_c_env_with_codex(&claude_home, &codex_home, &cs_home, &fixture)
-        .env("PATH", path)
-        .args(["claude", "run", "work"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains(
-            cs_home
-                .join("profiles/work/providers/claude/home")
-                .display()
-                .to_string(),
-        ))
-        .stdout(predicate::str::contains("{\"theme\":\"dark\"}"))
-        .stdout(predicate::str::contains("linked"));
-}
-
-#[test]
-fn codex_run_uses_isolated_home() {
-    let (dir, claude_home, cs_home) = isolated();
-    let codex_home = dir.path().join("codex");
-    std::fs::create_dir_all(&codex_home).unwrap();
-    let fixture = fixture_path(dir.path(), &[]);
-
-    std::fs::write(codex_home.join("auth.json"), fake_codex_auth("work-acct")).unwrap();
-    std::fs::write(codex_home.join("config.toml"), b"model = \"work\"\n").unwrap();
-    std::fs::create_dir_all(codex_home.join("skills/demo")).unwrap();
-    std::fs::write(codex_home.join("skills/demo/SKILL.md"), b"# demo\n").unwrap();
-
-    phase_c_env_with_codex(&claude_home, &codex_home, &cs_home, &fixture)
-        .args(["codex", "init", "work"])
-        .assert()
-        .success();
-    std::fs::write(
-        cs_home.join("profiles/work/providers/codex/home/auth.json"),
-        fake_codex_auth("work-acct"),
-    )
-    .unwrap();
-
-    install_fake_bin(
-        dir.path(),
-        "codex",
-        "#!/bin/sh\nprintf '%s\\n' \"$CODEX_HOME\"\ncat \"$CODEX_HOME/auth.json\"\ncat \"$CODEX_HOME/config.toml\"\nif [ -L \"$CODEX_HOME/skills\" ]; then echo linked; fi\n",
-    );
-    let path = format!(
-        "{}:{}",
-        dir.path().join("bin").display(),
-        std::env::var("PATH").unwrap()
-    );
-
-    phase_c_env_with_codex(&claude_home, &codex_home, &cs_home, &fixture)
-        .env("PATH", path)
-        .args(["codex", "run", "work"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains(
-            cs_home
-                .join("profiles/work/providers/codex/home")
-                .display()
-                .to_string(),
-        ))
-        .stdout(predicate::str::contains("work-acct"))
-        .stdout(predicate::str::contains("model = \"work\""))
-        .stdout(predicate::str::contains("linked"));
-}
-
-// --- Phase E: usage % view -----------------------------------------------------
+// --- usage % view -------------------------------------------------------------
 
 #[test]
 fn usage_default_shows_pct_columns() {

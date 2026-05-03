@@ -23,7 +23,6 @@ pub struct DoctorReport {
 pub struct PathReport {
     pub claude_home: PathInfo,
     pub cs_home: PathInfo,
-    pub config_file: PathInfo,
     pub projects_dir: PathInfo,
     pub state_file: PathInfo,
 }
@@ -75,7 +74,6 @@ pub fn run(paths: &Paths, kc: &dyn Keychain) -> Result<DoctorReport> {
     let path_report = PathReport {
         claude_home: PathInfo::probe(paths.claude_home.clone()),
         cs_home: PathInfo::probe(paths.cs_home.clone()),
-        config_file: PathInfo::probe(paths.config_file.clone()),
         projects_dir: PathInfo::probe(paths.projects_dir()),
         state_file: PathInfo::probe(paths.state_file()),
     };
@@ -203,7 +201,6 @@ impl fmt::Display for DoctorReport {
         writeln!(f, "Paths")?;
         writeln!(f, "  CLAUDE_HOME : {}", fmt_path(&self.paths.claude_home))?;
         writeln!(f, "  CS_HOME     : {}", fmt_path(&self.paths.cs_home))?;
-        writeln!(f, "  config      : {}", fmt_path(&self.paths.config_file))?;
         writeln!(f, "  projects/   : {}", fmt_path(&self.paths.projects_dir))?;
         writeln!(f, "  state.json  : {}", fmt_path(&self.paths.state_file))?;
         writeln!(f)?;

@@ -3,16 +3,12 @@
 //! Entry point: parses CLI arguments, rewrites bare invocations like `cs <name>`
 //! into explicit subcommands, then dispatches to the appropriate command handler.
 
-mod backup;
 mod cli;
 mod commands;
 mod doctor;
-mod dryrun;
 mod error;
-mod isolation;
 mod jsonio;
 mod keychain;
-mod links;
 mod lock;
 mod logging;
 mod master;
@@ -68,14 +64,8 @@ fn dispatch(paths: &Paths, kc: &dyn Keychain, cli: &Cli) -> Result<()> {
         Some(Command::Default(a)) => commands::default::set(paths, kc, &cli.global, a),
         Some(Command::DefaultGo) => commands::default::go(paths, kc, &cli.global),
         Some(Command::Refresh(a)) => commands::refresh::run(paths, kc, &cli.global, a),
-        Some(Command::Run(a)) => commands::launch::run_run(paths, kc, &cli.global, a),
-        Some(Command::Shell(a)) => commands::launch::run_shell(paths, kc, &cli.global, a),
         Some(Command::Setup(a)) => commands::setup::run(paths, &cli.global, a),
-        Some(Command::Alias(a)) => commands::alias::run(paths, &cli.global, a),
-        Some(Command::Migrate(a)) => commands::migrate::run(paths, kc, &cli.global, a),
         Some(Command::Master(a)) => commands::master::run(paths, &cli.global, a),
-        Some(Command::Link(a)) => commands::link::link(paths, &cli.global, a),
-        Some(Command::Links) => commands::link::list(paths, &cli.global),
         Some(Command::Uninstall(a)) => commands::uninstall::run(paths, &cli.global, a),
         Some(Command::Switch(a)) => {
             commands::switch::run(paths, kc, &cli.global, &a.name, &a.passthrough)

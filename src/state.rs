@@ -9,20 +9,10 @@ use crate::jsonio;
 pub struct State {
     pub active: Option<String>,
     pub previous: Option<String>,
-    /// Active profile for Claude provider.
-    #[serde(default)]
-    pub active_claude: Option<String>,
-    /// Previous profile for Claude provider.
-    #[serde(default)]
-    pub previous_claude: Option<String>,
     pub default: Option<String>,
     /// Profile that owns the shared skills/commands/agents/CLAUDE.md tree.
     #[serde(default)]
     pub master: Option<String>,
-    /// Milliseconds since epoch.
-    pub switched_at_ms: Option<u64>,
-    /// Milliseconds since epoch — earliest jsonl mtime to attribute to `active`.
-    pub since_ms: Option<u64>,
 }
 
 impl State {

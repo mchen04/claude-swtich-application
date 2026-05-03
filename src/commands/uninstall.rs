@@ -7,14 +7,9 @@ use crate::master;
 use crate::paths::Paths;
 use crate::shell::{self, Shell};
 
-pub fn run(paths: &Paths, global: &GlobalOpts, args: &UninstallArgs) -> Result<()> {
-    if global.dry_run {
-        let report = master::uninstall(paths, args.keep_master, true)?;
-        eprintln!("{:#?}", report);
-        return Ok(());
-    }
+pub fn run(paths: &Paths, _global: &GlobalOpts, args: &UninstallArgs) -> Result<()> {
     let _lock = CsLock::acquire(paths)?;
-    let report = master::uninstall(paths, args.keep_master, false)?;
+    let report = master::uninstall(paths, args.keep_master)?;
     for n in &report.restored {
         eprintln!("restored {n}");
     }

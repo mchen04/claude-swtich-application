@@ -5,14 +5,10 @@ use crate::lock::CsLock;
 use crate::paths::Paths;
 use crate::state::State;
 
-pub fn set(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &NameArg) -> Result<()> {
+pub fn set(paths: &Paths, kc: &dyn Keychain, _global: &GlobalOpts, args: &NameArg) -> Result<()> {
     let target = keychain::profile_account(&args.name);
     if kc.read(&target).is_err() {
         return Err(Error::ProfileNotFound(args.name.clone()));
-    }
-    if global.dry_run {
-        eprintln!("would set default profile to `{}`", args.name);
-        return Ok(());
     }
     let _lock = CsLock::acquire(paths)?;
     let path = paths.state_file();

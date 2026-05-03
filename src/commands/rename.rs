@@ -1,17 +1,19 @@
 use std::fs;
 
-use crate::backup::{BackupAction, Manifest};
 use crate::cli::{GlobalOpts, RenameArgs};
-use crate::dryrun::{Action, Plan};
 use crate::error::{Error, Result};
 use crate::keychain::{self, Keychain};
 use crate::lock::CsLock;
 use crate::master;
-use crate::output::OutputOpts;
 use crate::paths::Paths;
 use crate::state::State;
 
-pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &RenameArgs) -> Result<()> {
+pub fn run(
+    paths: &Paths,
+    kc: &dyn Keychain,
+    _global: &GlobalOpts,
+    args: &RenameArgs,
+) -> Result<()> {
     if args.from == args.to {
         return Err(Error::InvalidArgument(
             "source and target are the same".into(),
@@ -34,30 +36,6 @@ pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &RenameA
         return Err(Error::ProfileExists(args.to.clone()));
     }
 
-    if global.dry_run {
-        let mut plan = Plan::new();
-        if let Some(blob) = blob.as_ref() {
-            plan.push(Action::KeychainWrite {
-                account: to_acct.clone(),
-                bytes: blob.len(),
-            });
-            plan.push(Action::KeychainDelete {
-                account: from_acct.clone(),
-            });
-        }
-        if dir_exists {
-            plan.push(Action::Move {
-                from: from_dir.clone(),
-                to: to_dir.clone(),
-            });
-        }
-        let opts = OutputOpts {
-            json: global.json,
-        };
-        crate::output::emit(opts, &plan)?;
-        return Ok(());
-    }
-
     let _lock = CsLock::acquire(paths)?;
     if let Some(blob) = blob.as_ref() {
         keychain::write_verified(kc, &to_acct, blob)?;
@@ -70,17 +48,10 @@ pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &RenameA
         fs::rename(&from_dir, &to_dir).map_err(|e| Error::io_at(&to_dir, e))?;
     }
 
-    // Update state references.
     let path = paths.state_file();
     let mut state = State::load(&path).unwrap_or_default();
     let mut changed = false;
     for slot in [&mut state.active, &mut state.previous, &mut state.default] {
-        if slot.as_deref() == Some(&args.from) {
-            *slot = Some(args.to.clone());
-            changed = true;
-        }
-    }
-    for slot in [&mut state.active_claude, &mut state.previous_claude] {
         if slot.as_deref() == Some(&args.from) {
             *slot = Some(args.to.clone());
             changed = true;
@@ -94,36 +65,8 @@ pub fn run(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts, args: &RenameA
     if changed {
         state.save(&path)?;
     }
-
-    let mut manifest = Manifest::new("rename");
-    if let Some(blob) = blob.as_ref() {
-        manifest.push(BackupAction::KeychainReplace {
-            account: from_acct,
-            before_b64: Some(crate::backup::b64(blob)),
-            after_b64: None,
-        });
-        manifest.push(BackupAction::KeychainReplace {
-            account: to_acct,
-            before_b64: None,
-            after_b64: Some(crate::backup::b64(blob)),
-        });
-    }
-    if dir_exists {
-        manifest.push(BackupAction::FsMove {
-            from: from_dir.clone(),
-            to: to_dir.clone(),
-        });
-    }
     if was_master {
-        let symlink_actions = master::retarget_symlinks(paths, &args.to)?;
-        for a in symlink_actions {
-            manifest.push(a);
-        }
-        manifest.master_profile = Some(args.to.clone());
-    }
-    if let Err(e) = manifest.write(paths) {
-        tracing::warn!(op = "rename", error = %e, "failed to write rollback manifest");
-        eprintln!("warning: failed to write rollback manifest: {e}");
+        master::retarget_symlinks(paths, &args.to)?;
     }
 
     eprintln!("renamed `{}` -> `{}`", args.from, args.to);

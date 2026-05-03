@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use crate::backup::{BackupAction, Manifest};
 use crate::error::{Error, Result};
 use crate::paths::{Paths, SHARED_ITEMS};
 use crate::state::State;
@@ -92,12 +91,11 @@ pub struct SetReport {
     pub moved: Vec<String>,
     pub already: Vec<String>,
     pub skipped_empty: Vec<String>,
-    pub manifest_path: Option<PathBuf>,
 }
 
 /// Designate `name` as the master profile. Handles both first-time set and
 /// master-change in one function (dispatch on whether `state.master` is currently set).
-pub fn set(paths: &Paths, state: &mut State, name: &str, dry_run: bool) -> Result<SetReport> {
+pub fn set(paths: &Paths, state: &mut State, name: &str) -> Result<SetReport> {
     let new_dir = paths.profile_dir(name);
     let mut report = SetReport {
         master: name.to_string(),
@@ -105,12 +103,10 @@ pub fn set(paths: &Paths, state: &mut State, name: &str, dry_run: bool) -> Resul
         ..SetReport::default()
     };
 
-    if !dry_run {
-        fs::create_dir_all(&new_dir).map_err(|e| Error::io_at(&new_dir, e))?;
-    }
+    fs::create_dir_all(&new_dir).map_err(|e| Error::io_at(&new_dir, e))?;
 
     match state.master.clone() {
-        None => set_first_time(paths, state, name, &new_dir, dry_run, &mut report)?,
+        None => set_first_time(paths, name, &new_dir, &mut report)?,
         Some(prev) if prev == name => {
             // Re-designating the same master is a no-op (idempotent).
             for item in SHARED_ITEMS {
@@ -123,22 +119,20 @@ pub fn set(paths: &Paths, state: &mut State, name: &str, dry_run: bool) -> Resul
                 }
             }
         }
-        Some(prev) => set_change_master(paths, state, &prev, name, &new_dir, dry_run, &mut report)?,
+        Some(prev) => set_change_master(paths, &prev, name, &new_dir, &mut report)?,
     }
 
+    state.master = Some(name.to_string());
+    state.save(&paths.state_file())?;
     Ok(report)
 }
 
 fn set_first_time(
     paths: &Paths,
-    state: &mut State,
-    name: &str,
+    _name: &str,
     new_dir: &Path,
-    dry_run: bool,
     report: &mut SetReport,
 ) -> Result<()> {
-    let mut manifest = Manifest::new("master-set").with_master(name);
-
     for item in SHARED_ITEMS {
         let claude_path = paths.claude_home.join(item);
         let master_path = new_dir.join(item);
@@ -148,7 +142,6 @@ fn set_first_time(
             continue;
         };
         if meta.file_type().is_symlink() {
-            // Pre-existing symlink — leave as-is and warn via state.
             if symlinks::points_into(&claude_path, new_dir) {
                 report.already.push((*item).to_string());
             } else {
@@ -157,22 +150,9 @@ fn set_first_time(
             continue;
         }
         if meta.file_type().is_dir() && is_empty_dir(&claude_path) {
-            // Empty directory: create matching empty dir under master, replace with link.
-            if dry_run {
-                report.moved.push((*item).to_string());
-                continue;
-            }
             fs::create_dir_all(&master_path).map_err(|e| Error::io_at(&master_path, e))?;
             fs::remove_dir(&claude_path).map_err(|e| Error::io_at(&claude_path, e))?;
             symlinks::replace(&master_path, &claude_path)?;
-            manifest.push(BackupAction::FsMove {
-                from: claude_path.clone(),
-                to: master_path.clone(),
-            });
-            manifest.push(BackupAction::SymlinkCreate {
-                link: claude_path.clone(),
-                target: master_path.clone(),
-            });
             report.moved.push((*item).to_string());
             continue;
         }
@@ -182,46 +162,22 @@ fn set_first_time(
                 master_path.display()
             )));
         }
-        if dry_run {
-            report.moved.push((*item).to_string());
-            continue;
-        }
         move_path(&claude_path, &master_path)?;
         symlinks::replace(&master_path, &claude_path)?;
-        manifest.push(BackupAction::FsMove {
-            from: claude_path.clone(),
-            to: master_path.clone(),
-        });
-        manifest.push(BackupAction::SymlinkCreate {
-            link: claude_path.clone(),
-            target: master_path.clone(),
-        });
         report.moved.push((*item).to_string());
-    }
-
-    if !dry_run {
-        if !manifest.actions.is_empty() {
-            let path = manifest.write(paths)?;
-            report.manifest_path = Some(path);
-        }
-        state.master = Some(name.to_string());
-        state.save(&paths.state_file())?;
     }
     Ok(())
 }
 
 fn set_change_master(
     paths: &Paths,
-    state: &mut State,
     prev_name: &str,
     new_name: &str,
     new_dir: &Path,
-    dry_run: bool,
     report: &mut SetReport,
 ) -> Result<()> {
     let prev_dir = paths.profile_dir(prev_name);
 
-    // Refuse if any of the four candidates already exists under the new dir.
     for item in SHARED_ITEMS {
         let candidate = new_dir.join(item);
         if candidate.exists() {
@@ -233,41 +189,16 @@ fn set_change_master(
         }
     }
 
-    let mut manifest = Manifest::new("master-change").with_master(new_name);
-
     for item in SHARED_ITEMS {
         let from = prev_dir.join(item);
         let to = new_dir.join(item);
         let claude_path = paths.claude_home.join(item);
         if !from.exists() {
-            // Old master didn't have this item; skip.
-            continue;
-        }
-        if dry_run {
-            report.moved.push((*item).to_string());
             continue;
         }
         move_path(&from, &to)?;
-        manifest.push(BackupAction::FsMove {
-            from: from.clone(),
-            to: to.clone(),
-        });
-        // Retarget the ~/.claude/* symlink to the new location.
         symlinks::replace(&to, &claude_path)?;
-        manifest.push(BackupAction::SymlinkCreate {
-            link: claude_path.clone(),
-            target: to.clone(),
-        });
         report.moved.push((*item).to_string());
-    }
-
-    if !dry_run {
-        if !manifest.actions.is_empty() {
-            let path = manifest.write(paths)?;
-            report.manifest_path = Some(path);
-        }
-        state.master = Some(new_name.to_string());
-        state.save(&paths.state_file())?;
     }
     Ok(())
 }
@@ -276,70 +207,45 @@ fn set_change_master(
 pub struct UnsetReport {
     pub previous_master: Option<String>,
     pub restored: Vec<String>,
-    pub manifest_path: Option<PathBuf>,
 }
 
 /// Clear the master designation: move content from the master profile dir back
 /// to `~/.claude/`, drop the four symlinks, and clear `state.master`.
-pub fn unset(paths: &Paths, state: &mut State, dry_run: bool) -> Result<UnsetReport> {
+pub fn unset(paths: &Paths, state: &mut State) -> Result<UnsetReport> {
     let mut report = UnsetReport {
         previous_master: state.master.clone(),
         ..UnsetReport::default()
     };
     let Some(master_name) = state.master.clone() else {
-        return Ok(report); // No-op.
+        return Ok(report);
     };
     let master_dir = paths.profile_dir(&master_name);
-    let mut manifest = Manifest::new("master-unset").with_master(&master_name);
 
     for item in SHARED_ITEMS {
         let claude_path = paths.claude_home.join(item);
         let master_path = master_dir.join(item);
-        // Drop the symlink first (if it exists and points into master).
         let is_symlink = fs::symlink_metadata(&claude_path)
             .map(|m| m.file_type().is_symlink())
             .unwrap_or(false);
         let points_in = is_symlink && symlinks::points_into(&claude_path, &master_dir);
-        if dry_run {
-            if points_in && master_path.exists() {
-                report.restored.push((*item).to_string());
-            }
-            continue;
-        }
         if points_in {
             symlinks::remove(&claude_path)?;
-            manifest.push(BackupAction::SymlinkRemove {
-                link: claude_path.clone(),
-                target: master_path.clone(),
-            });
         }
         if master_path.exists() {
-            // Move content back to ~/.claude.
             move_path(&master_path, &claude_path)?;
-            manifest.push(BackupAction::FsMove {
-                from: master_path.clone(),
-                to: claude_path.clone(),
-            });
             report.restored.push((*item).to_string());
         }
     }
 
-    if !dry_run {
-        if !manifest.actions.is_empty() {
-            let path = manifest.write(paths)?;
-            report.manifest_path = Some(path);
-        }
-        state.master = None;
-        state.save(&paths.state_file())?;
-    }
+    state.master = None;
+    state.save(&paths.state_file())?;
     Ok(report)
 }
 
 /// Retarget the `~/.claude/{skills,commands,agents,CLAUDE.md}` symlinks to a
 /// new master profile directory. Used when the master profile is renamed.
-pub fn retarget_symlinks(paths: &Paths, new_master: &str) -> Result<Vec<BackupAction>> {
+pub fn retarget_symlinks(paths: &Paths, new_master: &str) -> Result<()> {
     let new_dir = paths.profile_dir(new_master);
-    let mut actions = Vec::new();
     for item in SHARED_ITEMS {
         let claude_path = paths.claude_home.join(item);
         let new_target = new_dir.join(item);
@@ -354,34 +260,27 @@ pub fn retarget_symlinks(paths: &Paths, new_master: &str) -> Result<Vec<BackupAc
             continue;
         }
         symlinks::replace(&new_target, &claude_path)?;
-        actions.push(BackupAction::SymlinkCreate {
-            link: claude_path,
-            target: new_target,
-        });
     }
-    Ok(actions)
+    Ok(())
 }
 
 #[derive(Debug, Serialize, Default)]
 pub struct UninstallReport {
     pub restored: Vec<String>,
     pub left_in_place: Vec<String>,
-    pub manifest_replayed: Option<PathBuf>,
 }
 
-pub fn uninstall(paths: &Paths, keep_master: bool, dry_run: bool) -> Result<UninstallReport> {
+pub fn uninstall(paths: &Paths, keep_master: bool) -> Result<UninstallReport> {
     let mut report = UninstallReport::default();
     let state_path = paths.state_file();
     let mut state = State::load(&state_path).unwrap_or_default();
     let Some(master_name) = state.master.clone() else {
-        // Nothing designated; only stray symlinks (if any) need cleanup.
         let status = status(paths, &state)?;
         for item in status.items {
             if matches!(
                 item.state,
                 ItemState::SymlinkBroken | ItemState::SymlinkForeign
-            ) && !dry_run
-            {
+            ) {
                 let _ = symlinks::remove(&item.claude_path);
             }
         }
@@ -390,24 +289,20 @@ pub fn uninstall(paths: &Paths, keep_master: bool, dry_run: bool) -> Result<Unin
     let master_dir = paths.profile_dir(&master_name);
 
     if keep_master {
-        // Drop symlinks, leave content in the master profile dir.
-        if !dry_run {
-            for item in SHARED_ITEMS {
-                let claude_path = paths.claude_home.join(item);
-                let is_symlink = fs::symlink_metadata(&claude_path)
-                    .map(|m| m.file_type().is_symlink())
-                    .unwrap_or(false);
-                if is_symlink && symlinks::points_into(&claude_path, &master_dir) {
-                    symlinks::remove(&claude_path)?;
-                    report.left_in_place.push((*item).to_string());
-                }
+        for item in SHARED_ITEMS {
+            let claude_path = paths.claude_home.join(item);
+            let is_symlink = fs::symlink_metadata(&claude_path)
+                .map(|m| m.file_type().is_symlink())
+                .unwrap_or(false);
+            if is_symlink && symlinks::points_into(&claude_path, &master_dir) {
+                symlinks::remove(&claude_path)?;
+                report.left_in_place.push((*item).to_string());
             }
-            eprintln!("left in profile `{}`", master_name);
         }
-    } else if !dry_run {
-        let unset_report = unset(paths, &mut state, false)?;
+        eprintln!("left in profile `{}`", master_name);
+    } else {
+        let unset_report = unset(paths, &mut state)?;
         report.restored = unset_report.restored;
-        report.manifest_replayed = unset_report.manifest_path;
     }
     Ok(report)
 }

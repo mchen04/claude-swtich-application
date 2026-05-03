@@ -5,7 +5,7 @@ use crate::error::{Error, Result};
 use crate::paths::Paths;
 use crate::shell::{self, Shell};
 
-pub fn run(_paths: &Paths, global: &GlobalOpts, args: &SetupArgs) -> Result<()> {
+pub fn run(_paths: &Paths, _global: &GlobalOpts, args: &SetupArgs) -> Result<()> {
     let shell = Shell::detect(args.shell)?;
     let rc = shell
         .rc_path()
@@ -13,10 +13,6 @@ pub fn run(_paths: &Paths, global: &GlobalOpts, args: &SetupArgs) -> Result<()> 
     let existing = fs::read_to_string(&rc).unwrap_or_default();
     let updated = shell::upsert_block(&existing, shell.snippet());
 
-    if global.dry_run {
-        eprintln!("would write {} ({} bytes)", rc.display(), updated.len());
-        return Ok(());
-    }
     if !args.non_interactive && existing == updated {
         eprintln!(
             "{} already contains the cs wrapper; nothing to do",

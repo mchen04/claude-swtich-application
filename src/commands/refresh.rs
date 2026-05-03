@@ -17,7 +17,7 @@ use crate::state::State;
 pub fn run(
     paths: &Paths,
     kc: &dyn Keychain,
-    global: &GlobalOpts,
+    _global: &GlobalOpts,
     args: &OptionalNameArg,
 ) -> Result<()> {
     let state = State::load(&paths.state_file()).unwrap_or_default();
@@ -38,11 +38,6 @@ pub fn run(
             name,
             creds.expires_in().map(|d| d.as_secs() as i64).unwrap_or(0)
         );
-    }
-
-    if global.dry_run {
-        eprintln!("would delegate refresh of `{}` via `claude /status`", name);
-        return Ok(());
     }
 
     let _lock = CsLock::acquire(paths)?;

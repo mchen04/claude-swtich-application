@@ -1,13 +1,9 @@
 //! Command handlers — one module per `cs` subcommand.
 
-pub mod alias;
 pub mod default;
 pub mod doctor;
-pub mod launch;
-pub mod link;
 pub mod list;
 pub mod master;
-pub mod migrate;
 pub mod refresh;
 pub mod rename;
 pub mod rm;

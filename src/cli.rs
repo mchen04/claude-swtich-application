@@ -5,9 +5,9 @@ use clap::{ArgAction, Args, Parser, Subcommand};
     name = "cs",
     version,
     about = "Claude profile switcher",
-    long_about = "Sub-second Claude profile switching with isolated per-profile homes, \
-                  master-profile sharing of skills/commands/agents/CLAUDE.md, and a \
-                  multi-account usage dashboard showing % of the 5-hour block and weekly cap left.",
+    long_about = "Sub-second Claude profile switching, master-profile sharing of \
+                  skills/commands/agents/CLAUDE.md, and a per-profile usage dashboard \
+                  showing % of the 5-hour block and weekly cap remaining.",
     propagate_version = true,
     disable_help_subcommand = true
 )]
@@ -28,10 +28,6 @@ pub struct GlobalOpts {
     /// Disable ANSI color in text output.
     #[arg(long, global = true)]
     pub no_color: bool,
-
-    /// Print planned actions without executing them.
-    #[arg(long, global = true)]
-    pub dry_run: bool,
 
     /// Operate against an explicit profile (overrides active).
     #[arg(long = "profile", global = true)]
@@ -64,22 +60,10 @@ pub enum Command {
     DefaultGo,
     /// Force-refresh OAuth credentials for a profile.
     Refresh(OptionalNameArg),
-    /// Launch claude in an isolated per-profile home.
-    Run(RunArgs),
-    /// Enter a shell with the per-profile claude home exported.
-    Shell(ShellArgs),
     /// Install or repair the shell wrapper.
     Setup(SetupArgs),
-    /// Create a shell alias for a profile.
-    Alias(AliasArgs),
-    /// Migrate from the legacy claude-switch tool.
-    Migrate(MigrateArgs),
     /// Designate a profile as master, show status, or clear the designation.
     Master(MasterArgs),
-    /// Bind the current working directory to a profile.
-    Link(LinkArgs),
-    /// Show all cwd→profile bindings.
-    Links,
     /// Remove cs from the system (symlinks, wrapper, optionally master).
     Uninstall(UninstallArgs),
 
@@ -134,22 +118,6 @@ pub struct OptionalNameArg {
 }
 
 #[derive(Debug, Args)]
-pub struct RunArgs {
-    pub name: String,
-    /// Args to pass to `claude` after switching.
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-    pub args: Vec<String>,
-}
-
-#[derive(Debug, Args)]
-pub struct ShellArgs {
-    pub name: String,
-    /// Print shell exports instead of spawning an interactive shell.
-    #[arg(long)]
-    pub print_env: bool,
-}
-
-#[derive(Debug, Args)]
 pub struct RenameArgs {
     pub from: String,
     pub to: String,
@@ -165,20 +133,6 @@ pub struct SetupArgs {
 }
 
 #[derive(Debug, Args)]
-pub struct AliasArgs {
-    pub name: String,
-    #[arg(long, value_enum, default_value_t = ShellChoice::Auto)]
-    pub shell: ShellChoice,
-}
-
-#[derive(Debug, Args)]
-pub struct MigrateArgs {
-    /// Path to the legacy claude-switch config (optional).
-    #[arg(long = "from")]
-    pub from: Option<std::path::PathBuf>,
-}
-
-#[derive(Debug, Args)]
 pub struct MasterArgs {
     /// Profile to designate as master. Omit to print status.
     #[arg(conflicts_with = "unset")]
@@ -186,12 +140,6 @@ pub struct MasterArgs {
     /// Clear the master designation; move shared content back to ~/.claude.
     #[arg(long, conflicts_with = "name")]
     pub unset: bool,
-}
-
-#[derive(Debug, Args)]
-pub struct LinkArgs {
-    /// Profile to bind (defaults to the active profile).
-    pub profile: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -234,14 +182,8 @@ pub const KNOWN_SUBCOMMANDS: &[&str] = &[
     "default",
     "default-go",
     "refresh",
-    "run",
-    "shell",
     "setup",
-    "alias",
-    "migrate",
     "master",
-    "link",
-    "links",
     "uninstall",
     "help",
     "__switch",

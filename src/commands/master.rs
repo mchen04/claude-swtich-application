@@ -24,45 +24,20 @@ fn run_status(paths: &Paths, global: &GlobalOpts) -> Result<()> {
     if global.json {
         emit_json(&st)?;
     } else {
-        emit_text(
-            OutputOpts {
-                json: false,
-            },
-            &TextStatus(&st),
-        )?;
+        emit_text(OutputOpts { json: false }, &TextStatus(&st))?;
     }
     Ok(())
 }
 
 fn run_set(paths: &Paths, global: &GlobalOpts, name: &str) -> Result<()> {
-    let state_path = paths.state_file();
-    if global.dry_run {
-        let mut state = State::load(&state_path).unwrap_or_default();
-        let report = master::set(paths, &mut state, name, true)?;
-        if global.json {
-            emit_json(&report)?;
-        } else {
-            emit_text(
-                OutputOpts {
-                    json: false,
-                },
-                &TextSet(&report),
-            )?;
-        }
-        return Ok(());
-    }
     let _lock = CsLock::acquire(paths)?;
+    let state_path = paths.state_file();
     let mut state = State::load(&state_path).unwrap_or_default();
-    let report = master::set(paths, &mut state, name, false)?;
+    let report = master::set(paths, &mut state, name)?;
     if global.json {
         emit_json(&report)?;
     } else {
-        emit_text(
-            OutputOpts {
-                json: false,
-            },
-            &TextSet(&report),
-        )?;
+        emit_text(OutputOpts { json: false }, &TextSet(&report))?;
     }
     Ok(())
 }
@@ -78,31 +53,12 @@ fn run_unset(paths: &Paths, global: &GlobalOpts) -> Result<()> {
         }
         return Ok(());
     }
-    if global.dry_run {
-        let report = master::unset(paths, &mut state, true)?;
-        if global.json {
-            emit_json(&report)?;
-        } else {
-            emit_text(
-                OutputOpts {
-                    json: false,
-                },
-                &TextUnset(&report),
-            )?;
-        }
-        return Ok(());
-    }
     let _lock = CsLock::acquire(paths)?;
-    let report = master::unset(paths, &mut state, false)?;
+    let report = master::unset(paths, &mut state)?;
     if global.json {
         emit_json(&report)?;
     } else {
-        emit_text(
-            OutputOpts {
-                json: false,
-            },
-            &TextUnset(&report),
-        )?;
+        emit_text(OutputOpts { json: false }, &TextUnset(&report))?;
     }
     Ok(())
 }
@@ -129,9 +85,6 @@ impl fmt::Display for TextSet<'_> {
         if !r.skipped_empty.is_empty() {
             writeln!(f, "skipped (missing/empty): {}", r.skipped_empty.join(", "))?;
         }
-        if let Some(p) = &r.manifest_path {
-            writeln!(f, "manifest: {}", p.display())?;
-        }
         Ok(())
     }
 }
@@ -148,9 +101,6 @@ impl fmt::Display for TextUnset<'_> {
             for n in &r.restored {
                 writeln!(f, "  {n}")?;
             }
-        }
-        if let Some(p) = &r.manifest_path {
-            writeln!(f, "manifest: {}", p.display())?;
         }
         Ok(())
     }
