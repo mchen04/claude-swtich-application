@@ -53,9 +53,12 @@ main.rs → cli::Cli → commands/<cmd>.rs → keychain / paths / state / master
   `jsonio::atomic_write_bytes` (tempfile + `rename(2)`).
 - **Locking** — `CsLock` (advisory `flock` on `~/.claude-cs/.lock`) is
   acquired before any mutation that touches state, keychain, or profile dirs.
-- **Usage cache** — `~/.claude-cs/cache/usage-limits/<profile>.json`. One-shot
-  reads use a 300s TTL; `cs usage --watch` uses a 30s TTL. 429s fall back to
-  the last cached value past TTL with a warning.
+- **Usage cache** — `~/.claude-cs/cache/usage-limits/<profile>.json`. Single
+  300s TTL for both one-shot and `--watch`; the endpoint is aggressively
+  rate-limited and a triggered 429 can lock out for 30+ minutes
+  (anthropics/claude-code#31637). 429s fall back to the last cached value past
+  TTL with a warning. Watch's "live feel" comes from per-tick countdown
+  re-rendering, not from refetches.
 
 ## Code conventions
 

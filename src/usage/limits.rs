@@ -14,12 +14,12 @@ use crate::profile::OauthCreds;
 
 const ENDPOINT: &str = "https://api.anthropic.com/api/oauth/usage";
 const OAUTH_BETA: &str = "oauth-2025-04-20";
-/// Default max age for one-shot calls. 300s matches community guidance for the
-/// 429-prone `/api/oauth/usage` endpoint.
-pub const DEFAULT_MAX_AGE: Duration = Duration::from_secs(300);
-/// Tighter max age used by `cs usage --watch` so the % values actually move
-/// while the user works. 2 calls/min/profile stays well clear of 429s.
-pub const WATCH_MAX_AGE: Duration = Duration::from_secs(30);
+/// Cache TTL for `/api/oauth/usage`. 300s matches the community-validated
+/// floor for this endpoint — Anthropic publishes no rate-limit number, has no
+/// `Retry-After` header, and a triggered 429 can lock the endpoint out for
+/// 30+ minutes (anthropics/claude-code#31637). Watch mode uses the same TTL;
+/// the per-tick "feels live" comes from countdown re-rendering, not refetches.
+pub const CACHE_MAX_AGE: Duration = Duration::from_secs(300);
 const TOKEN_LEEWAY: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -259,21 +259,12 @@ mod tests {
                 seven_day_opus: None,
             },
         };
-        assert!(cache_is_fresh(&fresh, DEFAULT_MAX_AGE));
+        assert!(cache_is_fresh(&fresh, CACHE_MAX_AGE));
 
         let stale = CacheFile {
-            fetched_at_unix: now.saturating_sub(DEFAULT_MAX_AGE.as_secs() + 5),
+            fetched_at_unix: now.saturating_sub(CACHE_MAX_AGE.as_secs() + 5),
             payload: fresh.payload.clone(),
         };
-        assert!(!cache_is_fresh(&stale, DEFAULT_MAX_AGE));
-
-        // Same cache, tighter max_age (watch mode): a 60s-old entry is fresh
-        // under 300s but stale under 30s — forcing a re-fetch.
-        let aged = CacheFile {
-            fetched_at_unix: now.saturating_sub(60),
-            payload: fresh.payload.clone(),
-        };
-        assert!(cache_is_fresh(&aged, DEFAULT_MAX_AGE));
-        assert!(!cache_is_fresh(&aged, WATCH_MAX_AGE));
+        assert!(!cache_is_fresh(&stale, CACHE_MAX_AGE));
     }
 }

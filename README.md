@@ -58,8 +58,9 @@ cs status --json | jq        # active profile + token expiry
 
 Running `cs` with no arguments (or `cs usage`) renders one row per saved
 profile, populated from `/api/oauth/usage` per profile. Responses are cached
-on disk to stay below the endpoint's rate limit — 300 s for one-shot reads,
-30 s when `--watch` is active.
+on disk for 300 s — the endpoint is aggressively rate-limited, has no
+`Retry-After` header, and a triggered 429 can lock you out for 30+ minutes,
+so the cache TTL is conservative.
 
 ```
    PROFILE          5H LEFT   5H RESETS    7D LEFT   7D RESETS    PLAN
@@ -76,9 +77,10 @@ on disk to stay below the endpoint's rate limit — 300 s for one-shot reads,
   (`token expired — cs refresh <name>`, or `rate-limited` when 429s persist
   past the on-disk cache).
 
-`cs usage --watch` repaints every second; live fetches happen at the 30 s
-watch-cache TTL, and reset countdowns recompute every tick from cached
-`resets_at` timestamps. `cs usage --json` emits the report struct for scripting.
+`cs usage --watch` repaints every second; reset countdowns recompute every
+tick from cached `resets_at` timestamps so the display feels live, while live
+fetches stay on the 300 s cache boundary. `cs usage --json` emits the report
+struct for scripting.
 
 ## Master profile (shared config)
 

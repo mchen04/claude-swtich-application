@@ -13,7 +13,7 @@ use crate::output::{emit_json, emit_text};
 use crate::paths::Paths;
 use crate::profile::OauthCreds;
 use crate::usage::{
-    limits::{self, DEFAULT_MAX_AGE, WATCH_MAX_AGE},
+    limits::{self, CACHE_MAX_AGE},
     LimitsError,
 };
 
@@ -47,7 +47,7 @@ pub fn run(
     if args.watch {
         return run_watch(paths, kc, global);
     }
-    let report = build(paths, kc, DEFAULT_MAX_AGE)?;
+    let report = build(paths, kc, CACHE_MAX_AGE)?;
     if global.json {
         emit_json(&report)?;
     } else {
@@ -140,7 +140,7 @@ fn run_watch(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts) -> Result<()
     let _ = stdout.execute(cursor::Hide);
     let mut first = true;
     loop {
-        let report = build(paths, kc, WATCH_MAX_AGE)?;
+        let report = build(paths, kc, CACHE_MAX_AGE)?;
         if !first {
             let _ = stdout.execute(cursor::MoveToColumn(0));
             let _ = stdout.execute(terminal::Clear(terminal::ClearType::FromCursorDown));
