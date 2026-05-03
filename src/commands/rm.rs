@@ -6,6 +6,8 @@ use crate::paths::Paths;
 use crate::state::State;
 
 pub fn run(paths: &Paths, kc: &dyn Keychain, _global: &GlobalOpts, args: &NameArg) -> Result<()> {
+    let _lock = CsLock::acquire(paths)?;
+
     let state_pre = State::load(&paths.state_file()).unwrap_or_default();
     if state_pre.master.as_deref() == Some(args.name.as_str()) {
         return Err(Error::MasterProfileLocked(args.name.clone()));
@@ -19,7 +21,6 @@ pub fn run(paths: &Paths, kc: &dyn Keychain, _global: &GlobalOpts, args: &NameAr
         return Err(Error::ProfileNotFound(args.name.clone()));
     }
 
-    let _lock = CsLock::acquire(paths)?;
     if kc_present {
         kc.delete(&target)?;
     }

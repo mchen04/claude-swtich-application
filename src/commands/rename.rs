@@ -19,6 +19,9 @@ pub fn run(
             "source and target are the same".into(),
         ));
     }
+
+    let _lock = CsLock::acquire(paths)?;
+
     let from_acct = keychain::profile_account(&args.from);
     let to_acct = keychain::profile_account(&args.to);
 
@@ -36,7 +39,6 @@ pub fn run(
         return Err(Error::ProfileExists(args.to.clone()));
     }
 
-    let _lock = CsLock::acquire(paths)?;
     if let Some(blob) = blob.as_ref() {
         keychain::write_verified(kc, &to_acct, blob)?;
         kc.delete(&from_acct)?;
