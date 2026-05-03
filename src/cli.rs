@@ -25,10 +25,6 @@ pub struct GlobalOpts {
     #[arg(long, global = true)]
     pub json: bool,
 
-    /// Disable ANSI color in text output.
-    #[arg(long, global = true)]
-    pub no_color: bool,
-
     /// Operate against an explicit profile (overrides active).
     #[arg(long = "profile", global = true)]
     pub profile: Option<String>,
@@ -102,9 +98,6 @@ pub struct UsageArgs {
 #[derive(Debug, Args)]
 pub struct SaveArgs {
     pub name: String,
-    /// Snapshot from the currently-active Keychain entry (default).
-    #[arg(long, default_value_t = true)]
-    pub from_active: bool,
 }
 
 #[derive(Debug, Args)]
@@ -128,8 +121,6 @@ pub struct SetupArgs {
     /// Shell to configure.
     #[arg(long, value_enum, default_value_t = ShellChoice::Auto)]
     pub shell: ShellChoice,
-    #[arg(long)]
-    pub non_interactive: bool,
 }
 
 #[derive(Debug, Args)]

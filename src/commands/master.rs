@@ -4,7 +4,7 @@ use crate::cli::{GlobalOpts, MasterArgs};
 use crate::error::Result;
 use crate::lock::CsLock;
 use crate::master;
-use crate::output::{emit_json, emit_text, OutputOpts};
+use crate::output::{emit_json, emit_text};
 use crate::paths::Paths;
 use crate::state::State;
 
@@ -24,7 +24,7 @@ fn run_status(paths: &Paths, global: &GlobalOpts) -> Result<()> {
     if global.json {
         emit_json(&st)?;
     } else {
-        emit_text(OutputOpts { json: false }, &TextStatus(&st))?;
+        emit_text(&TextStatus(&st))?;
     }
     Ok(())
 }
@@ -37,7 +37,7 @@ fn run_set(paths: &Paths, global: &GlobalOpts, name: &str) -> Result<()> {
     if global.json {
         emit_json(&report)?;
     } else {
-        emit_text(OutputOpts { json: false }, &TextSet(&report))?;
+        emit_text(&TextSet(&report))?;
     }
     Ok(())
 }
@@ -58,7 +58,7 @@ fn run_unset(paths: &Paths, global: &GlobalOpts) -> Result<()> {
     if global.json {
         emit_json(&report)?;
     } else {
-        emit_text(OutputOpts { json: false }, &TextUnset(&report))?;
+        emit_text(&TextUnset(&report))?;
     }
     Ok(())
 }

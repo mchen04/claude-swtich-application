@@ -1,14 +1,8 @@
 use std::fs;
 use std::os::unix::fs as unix_fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::error::{Error, Result};
-
-/// Read the symlink at `path`, returning Some(target) if it is a symlink, None otherwise.
-#[allow(dead_code)] // exposed for future cs status / cs links commands
-pub fn read(path: &Path) -> Option<PathBuf> {
-    fs::read_link(path).ok()
-}
 
 /// Atomic-ish symlink replacement: create at a sibling tempfile, then `rename(2)` over
 /// the destination. The rename is atomic on the same filesystem.

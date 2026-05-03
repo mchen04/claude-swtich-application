@@ -13,7 +13,7 @@ pub fn run(_paths: &Paths, _global: &GlobalOpts, args: &SetupArgs) -> Result<()>
     let existing = fs::read_to_string(&rc).unwrap_or_default();
     let updated = shell::upsert_block(&existing, shell.snippet());
 
-    if !args.non_interactive && existing == updated {
+    if existing == updated {
         eprintln!(
             "{} already contains the cs wrapper; nothing to do",
             rc.display()

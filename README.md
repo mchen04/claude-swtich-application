@@ -15,12 +15,25 @@ and per-account configuration.
 
 ## Install
 
+macOS only.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mchen04/claude-swtich-application/main/install.sh | sh
+cs setup            # install the shell wrapper into ~/.zshrc
+```
+
+The installer downloads the latest prebuilt binary for your arch
+(`aarch64`/`x86_64`) into `~/.local/bin/cs`. Set `CS_INSTALL_DIR=/somewhere`
+to install elsewhere. Make sure the install dir is on your `PATH`.
+
+### From source
+
 ```bash
 git clone https://github.com/mchen04/claude-swtich-application
 cd claude-swtich-application
 cargo build --release
-cp target/release/cs ~/.local/bin/      # or anywhere on $PATH
-cs setup                                 # installs the shell wrapper into ~/.zshrc
+cp target/release/cs ~/.local/bin/
+cs setup
 ```
 
 ## Quick start
@@ -45,7 +58,8 @@ cs status --json | jq        # active profile + token expiry
 
 Running `cs` with no arguments (or `cs usage`) renders one row per saved
 profile, populated from `/api/oauth/usage` per profile. Responses are cached
-on disk for 300 s to stay below the endpoint's rate limit.
+on disk to stay below the endpoint's rate limit — 300 s for one-shot reads,
+30 s when `--watch` is active.
 
 ```
    PROFILE          5H LEFT   5H RESETS    7D LEFT   7D RESETS    PLAN
@@ -62,10 +76,9 @@ on disk for 300 s to stay below the endpoint's rate limit.
   (`token expired — cs refresh <name>`, or `rate-limited` when 429s persist
   past the on-disk cache).
 
-`cs usage --watch` repaints every second; the 300 s limits cache means watch
-mostly reuses cached `%` values and only re-fetches on cache expiry. Reset
-countdowns recompute every tick. `cs usage --json` emits the report struct
-for scripting.
+`cs usage --watch` repaints every second; live fetches happen at the 30 s
+watch-cache TTL, and reset countdowns recompute every tick from cached
+`resets_at` timestamps. `cs usage --json` emits the report struct for scripting.
 
 ## Master profile (shared config)
 

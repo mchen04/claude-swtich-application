@@ -9,7 +9,7 @@ use crate::cli::{GlobalOpts, UsageArgs};
 use crate::commands::list;
 use crate::error::Result;
 use crate::keychain::{self, Keychain};
-use crate::output::{emit_json, emit_text, OutputOpts};
+use crate::output::{emit_json, emit_text};
 use crate::paths::Paths;
 use crate::profile::OauthCreds;
 use crate::usage::{
@@ -51,7 +51,7 @@ pub fn run(
     if global.json {
         emit_json(&report)?;
     } else {
-        emit_text(OutputOpts { json: false }, &TextReport { report: &report })?;
+        emit_text(&TextReport { report: &report })?;
     }
     Ok(())
 }

@@ -7,7 +7,6 @@ authors = ["Michael Chen <michael@zergai.com>"]
 description = "Claude Code account switcher with master-profile sharing and per-profile usage dashboard"
 license = "MIT"
 repository = "https://github.com/mchen04/claude-swtich-application"
-default-run = "cs"
 
 [[bin]]
 name = "cs"

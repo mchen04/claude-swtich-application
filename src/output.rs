@@ -30,7 +30,7 @@ pub fn emit_json<T: Serialize>(value: &T) -> Result<()> {
     Ok(())
 }
 
-pub fn emit_text<T: Display>(_opts: OutputOpts, value: &T) -> Result<()> {
+pub fn emit_text<T: Display>(value: &T) -> Result<()> {
     let stdout = io::stdout();
     let mut out = stdout.lock();
     writeln!(out, "{value}")?;
