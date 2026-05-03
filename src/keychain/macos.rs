@@ -56,21 +56,28 @@ impl Keychain for MacKeychain {
         // password items by service prefix without dropping into raw CoreFoundation
         // calls. Shell out to /usr/bin/security to enumerate. This is read-only and
         // does not prompt for ACL approval.
-        let output = std::process::Command::new("/usr/bin/security")
+        use std::collections::HashSet;
+        use std::io::{BufRead, BufReader, Read};
+        use std::process::{Command, Stdio};
+
+        let mut child = Command::new("/usr/bin/security")
             .args(["dump-keychain"])
-            .output()
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
             .map_err(|e| Error::Keychain(format!("dump-keychain spawn: {e}")))?;
-        if !output.status.success() {
-            return Err(Error::Keychain(format!(
-                "dump-keychain failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            )));
-        }
-        let text = String::from_utf8_lossy(&output.stdout);
-        let mut accounts = Vec::new();
+
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| Error::Keychain("dump-keychain: no stdout pipe".into()))?;
+
+        let mut accounts: HashSet<String> = HashSet::new();
         let mut current_service: Option<String> = None;
         let mut current_account: Option<String> = None;
-        for line in text.lines() {
+
+        for line in BufReader::new(stdout).lines() {
+            let line = line.map_err(|e| Error::Keychain(format!("dump-keychain read: {e}")))?;
             let line = line.trim();
             if line.starts_with("keychain:") {
                 current_service = None;
@@ -81,14 +88,26 @@ impl Keychain for MacKeychain {
                 current_account = parse_blob_value(rest);
             }
             if let (Some(svc), Some(acct)) = (&current_service, &current_account) {
-                if svc == SERVICE && !accounts.contains(acct) {
-                    accounts.push(acct.clone());
+                if svc == SERVICE {
+                    accounts.insert(acct.clone());
                 }
             }
         }
-        accounts.sort();
-        accounts.dedup();
-        Ok(accounts)
+
+        let status = child
+            .wait()
+            .map_err(|e| Error::Keychain(format!("dump-keychain wait: {e}")))?;
+        if !status.success() {
+            let mut stderr = String::new();
+            if let Some(mut s) = child.stderr.take() {
+                let _ = s.read_to_string(&mut stderr);
+            }
+            return Err(Error::Keychain(format!("dump-keychain failed: {stderr}")));
+        }
+
+        let mut out: Vec<String> = accounts.into_iter().collect();
+        out.sort();
+        Ok(out)
     }
 }
 
