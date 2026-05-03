@@ -10,7 +10,11 @@ pub fn run(_paths: &Paths, _global: &GlobalOpts, args: &SetupArgs) -> Result<()>
     let rc = shell
         .rc_path()
         .ok_or_else(|| Error::Config("HOME unset".into()))?;
-    let existing = fs::read_to_string(&rc).unwrap_or_default();
+    let existing = match fs::read_to_string(&rc) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(Error::io_at(&rc, e)),
+    };
     let updated = shell::upsert_block(&existing, shell.snippet());
 
     if existing == updated {
@@ -20,7 +24,7 @@ pub fn run(_paths: &Paths, _global: &GlobalOpts, args: &SetupArgs) -> Result<()>
         );
         return Ok(());
     }
-    fs::write(&rc, &updated).map_err(|e| Error::io_at(&rc, e))?;
+    crate::jsonio::atomic_write_bytes(&rc, updated.as_bytes())?;
     eprintln!("installed cs wrapper into {}", rc.display());
     eprintln!(
         "restart your shell or `source {}` to activate",

@@ -1,7 +1,7 @@
 use std::fs;
 
 use crate::cli::{GlobalOpts, UninstallArgs};
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::lock::CsLock;
 use crate::master;
 use crate::paths::Paths;
@@ -23,7 +23,7 @@ pub fn run(paths: &Paths, _global: &GlobalOpts, args: &UninstallArgs) -> Result<
             if let Ok(existing) = fs::read_to_string(&rc) {
                 let updated = shell::remove_block(&existing);
                 if updated != existing {
-                    fs::write(&rc, updated).map_err(|e| Error::io_at(&rc, e))?;
+                    crate::jsonio::atomic_write_bytes(&rc, updated.as_bytes())?;
                     eprintln!("removed cs wrapper from {}", rc.display());
                 }
             }

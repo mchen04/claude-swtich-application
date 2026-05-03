@@ -681,6 +681,25 @@ fn status_no_active_json_shape() {
 // --- usage % view -------------------------------------------------------------
 
 #[test]
+fn setup_refuses_when_rc_is_unreadable_and_leaves_it_intact() {
+    // A `.zshrc` with invalid UTF-8 must abort `cs setup` with an error,
+    // not silently overwrite the user's file with a blank wrapper.
+    let dir = TempDir::new().unwrap();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let rc = home.join(".zshrc");
+    let original: &[u8] = &[0xFF, 0xFE, b'\n'];
+    std::fs::write(&rc, original).unwrap();
+
+    cs().env("HOME", &home)
+        .args(["setup", "--shell", "zsh"])
+        .assert()
+        .failure();
+
+    assert_eq!(std::fs::read(&rc).unwrap(), original);
+}
+
+#[test]
 fn usage_default_shows_pct_columns() {
     let (dir, claude_home, cs_home) = isolated();
     let blob = fake_oauth("work@example.com", 3600);
