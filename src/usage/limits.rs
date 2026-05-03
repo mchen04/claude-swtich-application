@@ -75,10 +75,13 @@ pub fn fetch_for(
         return match fail_mode.as_str() {
             "expired" => Err(LimitsError::TokenExpired(profile.to_string())),
             "rate_limited" => match read_cache(paths, profile) {
-                Some(cache) => Ok(LimitsOutcome {
-                    limits: cache.payload,
-                    stale: true,
-                }),
+                Some(cache) => {
+                    write_cache(paths, profile, &cache.payload);
+                    Ok(LimitsOutcome {
+                        limits: cache.payload,
+                        stale: true,
+                    })
+                }
                 None => Err(LimitsError::RateLimited),
             },
             "http" => Err(LimitsError::Http("simulated http failure".into())),
@@ -116,10 +119,18 @@ pub fn fetch_for(
             })
         }
         Err(LimitsError::RateLimited) => match read_cache(paths, profile) {
-            Some(cache) => Ok(LimitsOutcome {
-                limits: cache.payload,
-                stale: true,
-            }),
+            Some(cache) => {
+                // Bump fetched_at_unix so watch mode (1Hz tick) doesn't hammer
+                // the endpoint at every tick once cache crosses TTL. Same
+                // payload, fresh timestamp; the next attempt waits for the
+                // TTL again — matters because a sustained 429 can lock the
+                // endpoint out for 30+ minutes.
+                write_cache(paths, profile, &cache.payload);
+                Ok(LimitsOutcome {
+                    limits: cache.payload,
+                    stale: true,
+                })
+            }
             None => Err(LimitsError::RateLimited),
         },
         Err(e) => Err(e),
