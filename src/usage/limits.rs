@@ -239,7 +239,7 @@ fn write_cache(paths: &Paths, profile: &str, payload: &UsageLimits) {
     let path = cache_path(paths, profile);
     match serde_json::to_vec(&cache) {
         Ok(bytes) => {
-            if let Err(e) = std::fs::write(&path, bytes) {
+            if let Err(e) = crate::jsonio::atomic_write_bytes(&path, &bytes) {
                 tracing::warn!("usage-limits cache write failed at {}: {e}", path.display());
             }
         }
