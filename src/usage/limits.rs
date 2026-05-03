@@ -19,7 +19,9 @@ const TOKEN_LEEWAY: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Bucket {
-    pub utilization: u8,
+    /// Percent already used (0.0–100.0). The endpoint returns this as a float —
+    /// `18.0`, `0.0`, etc. — so we keep the precision and round at render time.
+    pub utilization: f64,
     pub resets_at: Option<String>,
 }
 
@@ -216,16 +218,17 @@ mod tests {
 
     #[test]
     fn parses_endpoint_payload() {
+        // Real responses return utilization as a float (e.g. 18.0, 0.0).
         let raw = br#"{
-            "five_hour": { "utilization": 37, "resets_at": "2026-05-02T19:00:00Z" },
-            "seven_day": { "utilization": 64, "resets_at": "2026-05-06T12:00:00Z" },
+            "five_hour": { "utilization": 18.0, "resets_at": "2026-05-02T19:00:00Z" },
+            "seven_day": { "utilization": 0.0,  "resets_at": "2026-05-06T12:00:00Z" },
             "seven_day_sonnet": null,
             "seven_day_opus": null,
             "extra_usage": { "is_enabled": false }
         }"#;
         let p: UsageLimits = serde_json::from_slice(raw).unwrap();
-        assert_eq!(p.five_hour.utilization, 37);
-        assert_eq!(p.seven_day.utilization, 64);
+        assert!((p.five_hour.utilization - 18.0).abs() < 1e-9);
+        assert!((p.seven_day.utilization - 0.0).abs() < 1e-9);
         assert!(p.seven_day_sonnet.is_none());
     }
 
@@ -239,11 +242,11 @@ mod tests {
             fetched_at_unix: now,
             payload: UsageLimits {
                 five_hour: Bucket {
-                    utilization: 0,
+                    utilization: 0.0,
                     resets_at: None,
                 },
                 seven_day: Bucket {
-                    utilization: 0,
+                    utilization: 0.0,
                     resets_at: None,
                 },
                 seven_day_sonnet: None,

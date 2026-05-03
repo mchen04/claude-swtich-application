@@ -157,8 +157,9 @@ fn run_watch(paths: &Paths, kc: &dyn Keychain, global: &GlobalOpts) -> Result<()
     }
 }
 
-fn pct_left(utilization: u8) -> u8 {
-    100u8.saturating_sub(utilization.min(100))
+fn pct_left(utilization: f64) -> u8 {
+    let used = utilization.clamp(0.0, 100.0).round() as u8;
+    100u8.saturating_sub(used)
 }
 
 fn resets_in(now: DateTime<Utc>, resets_at: Option<&str>) -> Option<String> {
@@ -256,10 +257,13 @@ mod tests {
 
     #[test]
     fn pct_left_inverts_utilization() {
-        assert_eq!(pct_left(0), 100);
-        assert_eq!(pct_left(37), 63);
-        assert_eq!(pct_left(100), 0);
-        assert_eq!(pct_left(250), 0);
+        assert_eq!(pct_left(0.0), 100);
+        assert_eq!(pct_left(37.0), 63);
+        assert_eq!(pct_left(37.4), 63);
+        assert_eq!(pct_left(37.6), 62);
+        assert_eq!(pct_left(100.0), 0);
+        assert_eq!(pct_left(250.0), 0);
+        assert_eq!(pct_left(-5.0), 100);
     }
 
     #[test]
