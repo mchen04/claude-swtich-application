@@ -18,10 +18,31 @@ pub fn run(
     target_name: &str,
     passthrough: &[String],
 ) -> Result<()> {
-    let claude_target = read_target_claude(kc, target_name)?;
-
     let _lock = CsLock::acquire(paths)?;
     paths.ensure_cs_home()?;
+    run_locked(paths, kc, global, target_name)?;
+
+    if !passthrough.is_empty() {
+        let err = Command::new("claude").args(passthrough).exec();
+        return Err(Error::Subprocess {
+            cmd: "claude".into(),
+            message: err.to_string(),
+        });
+    }
+    Ok(())
+}
+
+/// Same as [`run`] minus the lock acquisition and the `claude` exec. Callers
+/// (currently the auto-switch tick) MUST already hold a [`CsLock`] before
+/// invoking this so the re-check it performed before deciding to switch
+/// remains valid through the swap.
+pub(crate) fn run_locked(
+    paths: &Paths,
+    kc: &dyn Keychain,
+    global: &GlobalOpts,
+    target_name: &str,
+) -> Result<()> {
+    let claude_target = read_target_claude(kc, target_name)?;
 
     let canonical = keychain::canonical_account();
     let prev_canonical_blob = kc.read(&canonical).ok();
@@ -82,14 +103,6 @@ pub fn run(
         eprintln!(
             "note: detected running `claude` process(es); restart them to pick up the new account"
         );
-    }
-
-    if !passthrough.is_empty() {
-        let err = Command::new("claude").args(passthrough).exec();
-        return Err(Error::Subprocess {
-            cmd: "claude".into(),
-            message: err.to_string(),
-        });
     }
     Ok(())
 }

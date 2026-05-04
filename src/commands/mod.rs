@@ -1,5 +1,7 @@
 //! Command handlers — one module per `cs` subcommand.
 
+pub mod auto_switch;
+pub mod auto_switch_tick;
 pub mod default;
 pub mod doctor;
 pub mod list;

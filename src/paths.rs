@@ -11,6 +11,7 @@ pub const SHARED_ITEMS: &[&str] = &["skills", "commands", "agents", "CLAUDE.md"]
 /// can redirect every filesystem touch into a temp directory.
 #[derive(Debug, Clone)]
 pub struct Paths {
+    pub home: PathBuf,
     pub claude_home: PathBuf,
     pub cs_home: PathBuf,
 }
@@ -34,6 +35,7 @@ impl Paths {
             .unwrap_or_else(|| home.join(".claude-cs"));
 
         Ok(Self {
+            home,
             claude_home,
             cs_home,
         })
@@ -73,6 +75,19 @@ impl Paths {
 
     pub fn usage_limits_cache_dir(&self) -> PathBuf {
         self.cs_home.join("cache").join("usage-limits")
+    }
+
+    pub fn cs_settings(&self) -> PathBuf {
+        self.cs_home.join("settings.json")
+    }
+
+    pub fn launch_agents_plist(&self) -> PathBuf {
+        self.home
+            .join("Library/LaunchAgents/com.claude-switch.autoswitch.plist")
+    }
+
+    pub fn autoswitch_log_dir(&self) -> PathBuf {
+        self.home.join("Library/Logs")
     }
 
     pub fn ensure_cs_home(&self) -> Result<()> {

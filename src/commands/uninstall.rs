@@ -1,6 +1,8 @@
+use std::env;
 use std::fs;
 
 use crate::cli::{GlobalOpts, UninstallArgs};
+use crate::commands::auto_switch as auto_switch_cmd;
 use crate::error::Result;
 use crate::lock::CsLock;
 use crate::master;
@@ -27,6 +29,25 @@ pub fn run(paths: &Paths, _global: &GlobalOpts, args: &UninstallArgs) -> Result<
                     eprintln!("removed cs wrapper from {}", rc.display());
                 }
             }
+        }
+    }
+
+    // Tear down the auto-switch launchd agent if it was installed.
+    if env::var_os("CS_TEST_NO_LAUNCHCTL").is_none() {
+        auto_switch_cmd::bootout_launchctl();
+    }
+    let plist = paths.launch_agents_plist();
+    if plist.exists() {
+        if let Err(e) = fs::remove_file(&plist) {
+            tracing::warn!(path = %plist.display(), error = %e, "could not remove plist");
+        } else {
+            eprintln!("removed {}", plist.display());
+        }
+    }
+    let settings = paths.cs_settings();
+    if settings.exists() {
+        if let Err(e) = fs::remove_file(&settings) {
+            tracing::warn!(path = %settings.display(), error = %e, "could not remove cs settings");
         }
     }
 

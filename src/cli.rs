@@ -62,6 +62,9 @@ pub enum Command {
     Master(MasterArgs),
     /// Remove cs from the system (symlinks, wrapper, optionally master).
     Uninstall(UninstallArgs),
+    /// Toggle auto-switching when the active profile hits its 5h or 7d cap.
+    #[command(name = "auto-switch")]
+    AutoSwitch(AutoSwitchArgs),
 
     /// Hidden: invoked by main.rs after rewriting `cs <name> [-- args...]`.
     #[command(name = "__switch", hide = true)]
@@ -72,6 +75,9 @@ pub enum Command {
     /// Hidden helper used by the shell wrapper.
     #[command(name = "__wrapper-emit-env", hide = true)]
     WrapperEmitEnv(NameArg),
+    /// Hidden: launchd-driven tick that swaps profiles when the active one caps.
+    #[command(name = "__autoswitch-tick", hide = true)]
+    AutoswitchTick,
 }
 
 #[derive(Debug, Args)]
@@ -141,6 +147,19 @@ pub struct UninstallArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct AutoSwitchArgs {
+    /// `on` to enable, `off` to disable. Omit to print current status.
+    #[arg(value_enum)]
+    pub mode: Option<OnOff>,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum OnOff {
+    On,
+    Off,
+}
+
+#[derive(Debug, Args)]
 pub struct SwitchArgs {
     pub name: String,
     /// Args to pass to `claude` after switching (after `--`).
@@ -176,8 +195,10 @@ pub const KNOWN_SUBCOMMANDS: &[&str] = &[
     "setup",
     "master",
     "uninstall",
+    "auto-switch",
     "help",
     "__switch",
     "__switch-previous",
     "__wrapper-emit-env",
+    "__autoswitch-tick",
 ];

@@ -961,3 +961,281 @@ fn usage_rate_limited_serves_cached_then_warns() {
         "expected rate-limited warning: {warnings:?}"
     );
 }
+
+// --- auto-switch ---------------------------------------------------------------
+
+fn auto_switch_env(
+    home: &std::path::Path,
+    claude_home: &std::path::Path,
+    cs_home: &std::path::Path,
+    fixture: &std::path::Path,
+) -> Command {
+    let mut c = cs();
+    c.env("HOME", home)
+        .env("CLAUDE_HOME", claude_home)
+        .env("CS_HOME", cs_home)
+        .env("CS_TEST_KEYCHAIN_FIXTURE", fixture)
+        .env("CS_TEST_NO_LAUNCHCTL", "1")
+        .env("CS_TEST_NO_NOTIFY", "1");
+    c
+}
+
+fn auto_switch_setup() -> (TempDir, PathBuf, PathBuf, PathBuf) {
+    let dir = TempDir::new().unwrap();
+    let home = dir.path().join("home");
+    let claude_home = home.join(".claude");
+    let cs_home = home.join(".claude-cs");
+    std::fs::create_dir_all(&claude_home).unwrap();
+    std::fs::create_dir_all(&cs_home).unwrap();
+    std::fs::create_dir_all(home.join("Library/LaunchAgents")).unwrap();
+    std::fs::create_dir_all(home.join("Library/Logs")).unwrap();
+    (dir, home, claude_home, cs_home)
+}
+
+#[test]
+fn auto_switch_status_off_when_no_settings() {
+    let (dir, home, claude_home, cs_home) = auto_switch_setup();
+    let blob = fake_oauth("primary@example.com", 3600);
+    let fixture = fixture_path(dir.path(), &[("test-user", &blob)]);
+
+    auto_switch_env(&home, &claude_home, &cs_home, &fixture)
+        .arg("auto-switch")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("auto-switch: off"));
+}
+
+#[test]
+fn auto_switch_on_writes_plist_and_flips_flag() {
+    let (dir, home, claude_home, cs_home) = auto_switch_setup();
+    let blob = fake_oauth("primary@example.com", 3600);
+    let fixture = fixture_path(dir.path(), &[("test-user", &blob)]);
+
+    auto_switch_env(&home, &claude_home, &cs_home, &fixture)
+        .args(["auto-switch", "on"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("auto-switch: on"));
+
+    let plist = home.join("Library/LaunchAgents/com.claude-switch.autoswitch.plist");
+    assert!(plist.exists(), "plist missing at {}", plist.display());
+    let plist_text = std::fs::read_to_string(&plist).unwrap();
+    assert!(plist_text.contains("__autoswitch-tick"));
+    assert!(plist_text.contains("<integer>300</integer>"));
+
+    let settings: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(cs_home.join("settings.json")).unwrap()).unwrap();
+    assert_eq!(settings["auto_switch"], true);
+}
+
+#[test]
+fn auto_switch_off_removes_plist_and_flips_flag() {
+    let (dir, home, claude_home, cs_home) = auto_switch_setup();
+    let blob = fake_oauth("primary@example.com", 3600);
+    let fixture = fixture_path(dir.path(), &[("test-user", &blob)]);
+
+    auto_switch_env(&home, &claude_home, &cs_home, &fixture)
+        .args(["auto-switch", "on"])
+        .assert()
+        .success();
+    auto_switch_env(&home, &claude_home, &cs_home, &fixture)
+        .args(["auto-switch", "off"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("auto-switch: off"));
+
+    let plist = home.join("Library/LaunchAgents/com.claude-switch.autoswitch.plist");
+    assert!(!plist.exists(), "plist should have been removed");
+
+    let settings: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(cs_home.join("settings.json")).unwrap()).unwrap();
+    assert_eq!(settings["auto_switch"], false);
+}
+
+#[test]
+fn uninstall_clears_auto_switch_artifacts() {
+    let (dir, home, claude_home, cs_home) = auto_switch_setup();
+    let blob = fake_oauth("primary@example.com", 3600);
+    let fixture = fixture_path(dir.path(), &[("test-user", &blob)]);
+
+    auto_switch_env(&home, &claude_home, &cs_home, &fixture)
+        .args(["auto-switch", "on"])
+        .assert()
+        .success();
+    auto_switch_env(&home, &claude_home, &cs_home, &fixture)
+        .arg("uninstall")
+        .assert()
+        .success();
+
+    let plist = home.join("Library/LaunchAgents/com.claude-switch.autoswitch.plist");
+    assert!(!plist.exists(), "plist should have been removed by uninstall");
+    assert!(
+        !cs_home.join("settings.json").exists(),
+        "settings.json should have been removed by uninstall"
+    );
+}
+
+#[test]
+fn uninstall_is_idempotent_when_auto_switch_never_enabled() {
+    let (dir, home, claude_home, cs_home) = auto_switch_setup();
+    let blob = fake_oauth("primary@example.com", 3600);
+    let fixture = fixture_path(dir.path(), &[("test-user", &blob)]);
+
+    auto_switch_env(&home, &claude_home, &cs_home, &fixture)
+        .arg("uninstall")
+        .assert()
+        .success();
+}
+
+fn write_fixture_limits(dir: &std::path::Path, profile: &str, five: f64, seven: f64) {
+    std::fs::create_dir_all(dir).unwrap();
+    let payload = format!(
+        r#"{{
+            "five_hour":  {{ "utilization": {five}, "resets_at": "2099-01-01T00:00:00Z" }},
+            "seven_day":  {{ "utilization": {seven}, "resets_at": "2099-01-01T00:00:00Z" }},
+            "seven_day_sonnet": null,
+            "seven_day_opus": null,
+            "extra_usage": {{ "is_enabled": false }}
+        }}"#
+    );
+    std::fs::write(dir.join(format!("{profile}.json")), payload).unwrap();
+}
+
+fn write_settings(cs_home: &std::path::Path, auto_switch: bool) {
+    std::fs::create_dir_all(cs_home).unwrap();
+    let body = serde_json::json!({ "auto_switch": auto_switch });
+    std::fs::write(cs_home.join("settings.json"), body.to_string()).unwrap();
+}
+
+fn write_active(cs_home: &std::path::Path, name: &str) {
+    std::fs::create_dir_all(cs_home).unwrap();
+    let body = serde_json::json!({ "active": name });
+    std::fs::write(cs_home.join("state.json"), body.to_string()).unwrap();
+}
+
+#[test]
+fn autoswitch_tick_swaps_when_active_capped() {
+    let (dir, home, claude_home, cs_home) = auto_switch_setup();
+    let blob_a = fake_oauth("a@example.com", 3600);
+    let blob_b = fake_oauth("b@example.com", 3600);
+    let fixture = fixture_path(
+        dir.path(),
+        &[
+            ("test-user", &blob_a),
+            ("Claude Code-credentials-a", &blob_a),
+            ("Claude Code-credentials-b", &blob_b),
+        ],
+    );
+    let limits_dir = dir.path().join("limits");
+    write_fixture_limits(&limits_dir, "a", 100.0, 50.0);
+    write_fixture_limits(&limits_dir, "b", 20.0, 10.0);
+    write_settings(&cs_home, true);
+    write_active(&cs_home, "a");
+
+    auto_switch_env(&home, &claude_home, &cs_home, &fixture)
+        .env("CS_TEST_LIMITS_FIXTURE", &limits_dir)
+        .arg("__autoswitch-tick")
+        .assert()
+        .success();
+
+    let state: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(cs_home.join("state.json")).unwrap()).unwrap();
+    assert_eq!(state["active"], "b", "tick should have switched to b");
+
+    let settings: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(cs_home.join("settings.json")).unwrap()).unwrap();
+    assert!(settings["last_switch_unix"].is_number());
+}
+
+#[test]
+fn autoswitch_tick_no_op_when_disabled() {
+    let (dir, home, claude_home, cs_home) = auto_switch_setup();
+    let blob_a = fake_oauth("a@example.com", 3600);
+    let blob_b = fake_oauth("b@example.com", 3600);
+    let fixture = fixture_path(
+        dir.path(),
+        &[
+            ("test-user", &blob_a),
+            ("Claude Code-credentials-a", &blob_a),
+            ("Claude Code-credentials-b", &blob_b),
+        ],
+    );
+    let limits_dir = dir.path().join("limits");
+    write_fixture_limits(&limits_dir, "a", 100.0, 50.0);
+    write_fixture_limits(&limits_dir, "b", 20.0, 10.0);
+    write_settings(&cs_home, false);
+    write_active(&cs_home, "a");
+
+    auto_switch_env(&home, &claude_home, &cs_home, &fixture)
+        .env("CS_TEST_LIMITS_FIXTURE", &limits_dir)
+        .arg("__autoswitch-tick")
+        .assert()
+        .success();
+
+    let state: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(cs_home.join("state.json")).unwrap()).unwrap();
+    assert_eq!(state["active"], "a", "tick should not have switched");
+}
+
+#[test]
+fn autoswitch_tick_no_op_when_active_healthy() {
+    let (dir, home, claude_home, cs_home) = auto_switch_setup();
+    let blob_a = fake_oauth("a@example.com", 3600);
+    let fixture = fixture_path(
+        dir.path(),
+        &[
+            ("test-user", &blob_a),
+            ("Claude Code-credentials-a", &blob_a),
+        ],
+    );
+    let limits_dir = dir.path().join("limits");
+    write_fixture_limits(&limits_dir, "a", 50.0, 50.0);
+    write_settings(&cs_home, true);
+    write_active(&cs_home, "a");
+
+    auto_switch_env(&home, &claude_home, &cs_home, &fixture)
+        .env("CS_TEST_LIMITS_FIXTURE", &limits_dir)
+        .arg("__autoswitch-tick")
+        .assert()
+        .success();
+
+    let state: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(cs_home.join("state.json")).unwrap()).unwrap();
+    assert_eq!(state["active"], "a", "healthy active must not be touched");
+}
+
+#[test]
+fn autoswitch_tick_aborts_when_state_changes_under_us() {
+    let (dir, home, claude_home, cs_home) = auto_switch_setup();
+    let blob_a = fake_oauth("a@example.com", 3600);
+    let blob_b = fake_oauth("b@example.com", 3600);
+    let blob_c = fake_oauth("c@example.com", 3600);
+    let fixture = fixture_path(
+        dir.path(),
+        &[
+            ("test-user", &blob_a),
+            ("Claude Code-credentials-a", &blob_a),
+            ("Claude Code-credentials-b", &blob_b),
+            ("Claude Code-credentials-c", &blob_c),
+        ],
+    );
+    let limits_dir = dir.path().join("limits");
+    write_fixture_limits(&limits_dir, "a", 100.0, 50.0);
+    write_fixture_limits(&limits_dir, "b", 20.0, 10.0);
+    write_fixture_limits(&limits_dir, "c", 50.0, 30.0);
+    write_settings(&cs_home, true);
+    write_active(&cs_home, "a");
+
+    // The tick will see active=A, decide to switch to B, then inside the lock
+    // the test hook flips state.active to C — the tick must abort.
+    auto_switch_env(&home, &claude_home, &cs_home, &fixture)
+        .env("CS_TEST_LIMITS_FIXTURE", &limits_dir)
+        .env("CS_TEST_AUTOSWITCH_PRE_LOCK_STATE_ACTIVE", "c")
+        .arg("__autoswitch-tick")
+        .assert()
+        .success();
+
+    let state: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(cs_home.join("state.json")).unwrap()).unwrap();
+    assert_eq!(state["active"], "c", "tick must defer to the racing writer");
+}

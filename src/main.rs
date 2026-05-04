@@ -3,6 +3,7 @@
 //! Entry point: parses CLI arguments, rewrites bare invocations like `cs <name>`
 //! into explicit subcommands, then dispatches to the appropriate command handler.
 
+mod auto_switch;
 mod cli;
 mod commands;
 mod doctor;
@@ -15,6 +16,7 @@ mod master;
 mod output;
 mod paths;
 mod profile;
+mod settings;
 mod shell;
 mod state;
 mod symlinks;
@@ -67,6 +69,8 @@ fn dispatch(paths: &Paths, kc: &dyn Keychain, cli: &Cli) -> Result<()> {
         Some(Command::Setup(a)) => commands::setup::run(paths, &cli.global, a),
         Some(Command::Master(a)) => commands::master::run(paths, &cli.global, a),
         Some(Command::Uninstall(a)) => commands::uninstall::run(paths, &cli.global, a),
+        Some(Command::AutoSwitch(a)) => commands::auto_switch::run(paths, &cli.global, a),
+        Some(Command::AutoswitchTick) => commands::auto_switch_tick::run(paths, kc),
         Some(Command::Switch(a)) => {
             commands::switch::run(paths, kc, &cli.global, &a.name, &a.passthrough)
         }
