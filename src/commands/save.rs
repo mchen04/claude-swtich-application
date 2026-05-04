@@ -15,9 +15,7 @@ pub fn run(paths: &Paths, kc: &dyn Keychain, _global: &GlobalOpts, args: &SaveAr
     })?;
     OauthCreds::parse(&canonical_blob)?;
 
-    if kc.read(&target).is_ok() {
-        return Err(Error::ProfileExists(args.name.clone()));
-    }
+    let existed = kc.read(&target).is_ok();
 
     let claude_settings = std::fs::read(paths.claude_settings()).ok();
 
@@ -27,6 +25,10 @@ pub fn run(paths: &Paths, kc: &dyn Keychain, _global: &GlobalOpts, args: &SaveAr
         crate::jsonio::atomic_write_bytes(&paths.profile_claude_settings(&args.name), settings)?;
     }
 
-    eprintln!("saved profile `{}` for claude", args.name);
+    if existed {
+        eprintln!("overwrote profile `{}` with current claude credentials", args.name);
+    } else {
+        eprintln!("saved profile `{}` for claude", args.name);
+    }
     Ok(())
 }

@@ -193,20 +193,39 @@ fn save_round_trip() {
 }
 
 #[test]
-fn save_refuses_overwrite() {
+fn save_overwrites_existing() {
     let (dir, claude_home, cs_home) = isolated();
-    let canonical_blob = fake_oauth("primary@example.com", 3600);
-    let fixture = fixture_path(dir.path(), &[("test-user", &canonical_blob)]);
+    let first_blob = fake_oauth("primary@example.com", 3600);
+    let fixture = fixture_path(dir.path(), &[("test-user", &first_blob)]);
 
     phase_c_env(&claude_home, &cs_home, &fixture)
         .args(["save", "personal"])
         .assert()
-        .success();
+        .success()
+        .stderr(predicate::str::contains("saved profile"));
+
+    // Replace the canonical entry with a different account, then re-save the same profile name.
+    let second_blob = fake_oauth("rotated@example.com", 7200);
+    let fixture = fixture_path(
+        dir.path(),
+        &[
+            ("test-user", &second_blob),
+            ("Claude Code-credentials-personal", &first_blob),
+        ],
+    );
 
     phase_c_env(&claude_home, &cs_home, &fixture)
         .args(["save", "personal"])
         .assert()
-        .failure();
+        .success()
+        .stderr(predicate::str::contains("overwrote profile"));
+
+    phase_c_env(&claude_home, &cs_home, &fixture)
+        .args(["list", "--json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("rotated@example.com"))
+        .stdout(predicate::str::contains("primary@example.com").not());
 }
 
 #[test]
